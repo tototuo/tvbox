@@ -15,6 +15,11 @@ from server import LiveService, StreamCache
 
 
 class BilibiliResolverTest(unittest.TestCase):
+    def test_returned_qn_reads_current_qn(self):
+        play_url = {"stream": [{"format": [{"codec": [{"current_qn": 250, "accept_qn": [10000, 400, 250]}]}]}]}
+        self.assertEqual(BilibiliResolver._returned_qn(play_url), 250)
+        self.assertEqual(BilibiliResolver._returned_qn({}), 0)
+
     def test_category_id_keeps_parent_area(self):
         resolver = BilibiliResolver()
         resolver._get_json = Mock(return_value={

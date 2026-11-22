@@ -228,6 +228,8 @@ class BilibiliResolver:
             raise PlatformResolverError("B站未返回可用画质")
         selected_qn = max(accepted)
         selected = self._get_play_url(room_id, qn=selected_qn)
+        # 不登录时请求原画 / 蓝光也只会给超清，标签按实际返回的 current_qn 显示
+        selected_qn = self._returned_qn(selected) or selected_qn
         candidates = self._extract_candidates(selected)
         if not candidates:
             raise PlatformResolverError("B站未返回可播放地址")
@@ -281,6 +283,16 @@ class BilibiliResolver:
             return payload["data"]["playurl_info"]["playurl"]
         except (KeyError, TypeError) as error:
             raise PlatformResolverError("B站播放信息响应异常") from error
+
+    @staticmethod
+    def _returned_qn(play_url: dict) -> int:
+        for stream in play_url.get("stream") or []:
+            for fmt in (stream or {}).get("format") or []:
+                for codec in (fmt or {}).get("codec") or []:
+                    qn = positive_int((codec or {}).get("current_qn"))
+                    if qn > 0:
+                        return qn
+        return 0
 
     @staticmethod
     def _accepted_qns(play_url: dict) -> list[int]:
