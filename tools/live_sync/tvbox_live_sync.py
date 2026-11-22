@@ -9,6 +9,9 @@
 - m3u8：读播放列表；主列表就跟进第一个子列表；再下载第一个分片的开头，分片拿不到算失效
   （实测很多线路列表能打开、分片 404）
 - 其他（flv / ts 直连等）：200 且开头是真正的媒体数据才算可用
+- 直播必须在更新：播放列表的时间戳（PROGRAM-DATE-TIME）不能是半天以前的；隔一个分片时长再拉一次，
+  内容必须变化；带 ENDLIST 的（会播完）也不要。实测有 CDN 把一年前的 3 个分片缓存着一直返回，
+  电视上就是一小段反复重播
 - 分片和直连流的开头必须像视频（TS / FLV / MP4 / ID3），「sign error」「链接请求出错」
   这类返回 200 的文字一律算失效
 保护：本次可用数比上次少一半以上（多半是网络问题）时保留上次结果，不覆盖。
@@ -21,6 +24,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -50,6 +54,7 @@ class ExtraGroup:
     exclude: re.Pattern
     aliases: dict  # 同一个台的不同叫法 → 统一名字
     order: tuple[str, ...]  # 分组内频道排序：先按这里的顺序，其余按名字
+    exclude_url: re.Pattern = re.compile(r"qingting\.fm")  # 蜻蜓 FM 是电台，只有声音
 
 
 EXTRA_GROUPS = [
@@ -197,19 +202,33 @@ class Checker:
         if not data[:PROBE_BYTES].lstrip().startswith(b"#EXTM3U"):
             return total / elapsed if looks_like_media(data) else None  # flv / ts 直连
         playlist = data.decode("utf-8", "replace")
+        playlist_url = final_url
         for _ in range(3):  # 主列表 → 子列表，最多跟两层
             uri = first_uri(playlist)
             if uri is None:
                 return None
             target = urllib.parse.urljoin(final_url, uri)
             if "#EXT-X-STREAM-INF" not in playlist:
+                if "#EXT-X-ENDLIST" in playlist or playlist_is_stale(playlist, time.time()):
+                    return None
+                fetched_at = time.monotonic()
                 segment, total, elapsed, _ = self.download(target)
                 if is_encrypted(playlist):  # 加密分片是随机字节，只要求不是文字 / 网页
                     ok = bool(segment) and not looks_like_text(segment)
                 else:
                     ok = looks_like_media(segment)
-                return total / elapsed if ok else None
+                if not ok:
+                    return None
+                # 等一个分片时长再拉一次，直播的列表一定会变；不变就是死缓存
+                wait = min(target_duration(playlist), LIVE_UPDATE_WAIT_MAX) + 1 - (time.monotonic() - fetched_at)
+                if wait > 0:
+                    time.sleep(wait)
+                again, _ = self.fetch(playlist_url, PLAYLIST_MAX_BYTES)
+                if again.decode("utf-8", "replace").strip() == playlist.strip():
+                    return None
+                return total / elapsed
             sub, final_url = self.fetch(target, PLAYLIST_MAX_BYTES)
+            playlist_url = final_url
             playlist = sub.decode("utf-8", "replace")
             if not playlist.lstrip().startswith("#EXTM3U"):
                 return None
@@ -217,6 +236,37 @@ class Checker:
 
 
 TS_PACKET = 188
+LIVE_UPDATE_WAIT_MAX = 10.0  # 等列表更新最多等这么久（TARGETDURATION 一般 2~10 秒）
+STALE_PROGRAM_TIME_SECONDS = 12 * 3600  # 时间戳早于这么久算死缓存；放宽到半天，容忍服务器时区写错
+
+
+def target_duration(playlist: str) -> float:
+    for line in playlist.splitlines():
+        if line.startswith("#EXT-X-TARGETDURATION:"):
+            try:
+                return float(line.split(":", 1)[1])
+            except ValueError:
+                break
+    return 6.0
+
+
+def playlist_is_stale(playlist: str, now: float) -> bool:
+    """最后一个 PROGRAM-DATE-TIME 加上之后的分片时长，比现在早半天以上就是死缓存。没有时间戳返回 False。"""
+    stamp: float | None = None
+    for line in playlist.splitlines():
+        if line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
+            value = line.split(":", 1)[1].strip()
+            value = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", value.replace("Z", "+00:00"))
+            try:
+                stamp = datetime.datetime.fromisoformat(value).timestamp()
+            except ValueError:
+                stamp = None
+        elif line.startswith("#EXTINF:") and stamp is not None:
+            try:
+                stamp += float(line.split(":", 1)[1].split(",", 1)[0])
+            except ValueError:
+                pass
+    return stamp is not None and now - stamp > STALE_PROGRAM_TIME_SECONDS
 
 
 def is_encrypted(playlist: str) -> bool:
@@ -287,9 +337,11 @@ def iter_name_urls(text: str):
             name = None
         elif "," in line and not line.startswith("#"):
             channel, source = line.split(",", 1)
-            url = stream_url(source)
-            if url.startswith(("http://", "https://")):
-                yield channel.strip(), url
+            # 有的源把多个地址用 # 拼在一行
+            for url in stream_url(source).split("#"):
+                url = url.strip()
+                if url.startswith(("http://", "https://")):
+                    yield channel.strip(), url
 
 
 def pick_extra_entries(group: ExtraGroup, texts: list[str]) -> list[Entry]:
@@ -298,7 +350,12 @@ def pick_extra_entries(group: ExtraGroup, texts: list[str]) -> list[Entry]:
     seen: set[str] = set()
     for text in texts:
         for name, url in iter_name_urls(text):
-            if not group.include.search(name) or group.exclude.search(name) or url in seen:
+            if (
+                not group.include.search(name)
+                or group.exclude.search(name)
+                or group.exclude_url.search(url)
+                or url in seen
+            ):
                 continue
             seen.add(url)
             picked.setdefault(group.aliases.get(name, name), []).append(url)

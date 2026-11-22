@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -64,6 +65,24 @@ class LiveSyncTest(unittest.TestCase):
         self.assertFalse(is_encrypted("#EXTM3U\n#EXT-X-KEY:METHOD=NONE\nseg.ts"))
         self.assertTrue(looks_like_text(b"sign error"))
         self.assertFalse(looks_like_text(bytes(range(128, 256))))
+
+
+class LivenessTest(unittest.TestCase):
+    def test_stale_program_date_time(self):
+        old = "#EXTM3U\n#EXT-X-PROGRAM-DATE-TIME:2025-12-30T11:12:02+0800\n#EXTINF:8.00\na.ts\n"
+        now = 1795000000.0  # 2026-11 左右
+        self.assertTrue(tvbox_live_sync.playlist_is_stale(old, now))
+        fresh = time.strftime("%Y-%m-%dT%H:%M:%S+0000", time.gmtime(now - 60))
+        self.assertFalse(tvbox_live_sync.playlist_is_stale(f"#EXTM3U\n#EXT-X-PROGRAM-DATE-TIME:{fresh}\n", now))
+        self.assertFalse(tvbox_live_sync.playlist_is_stale("#EXTM3U\n#EXTINF:8,\na.ts\n", now))  # 没时间戳不判
+
+    def test_target_duration(self):
+        self.assertEqual(tvbox_live_sync.target_duration("#EXTM3U\n#EXT-X-TARGETDURATION:8\n"), 8.0)
+        self.assertEqual(tvbox_live_sync.target_duration("#EXTM3U\n"), 6.0)
+
+    def test_splits_hash_joined_urls(self):
+        pairs = list(tvbox_live_sync.iter_name_urls("浙江经视,http://a/1.m3u8#https://b/2.m3u8\n"))
+        self.assertEqual(pairs, [("浙江经视", "http://a/1.m3u8"), ("浙江经视", "https://b/2.m3u8")])
 
 
 class ExtraGroupTest(unittest.TestCase):
