@@ -19,6 +19,9 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+import shutil
+
+import tvbox_live_sync
 from bilibili_login import BilibiliLogin
 from bilibili_resolver import BilibiliResolver
 from douyin_resolver import DouyinResolver
@@ -39,8 +42,80 @@ from platform_common import (
 CATALOG_PATH = Path(__file__).with_name("catalog.json")
 # 电视上扫码登录 B站后的 Cookie（权限 600，已加入 .gitignore）
 BILIBILI_COOKIE_PATH = Path(__file__).with_name("bilibili_cookie.txt")
+# 电视直播源同步的开关和参数（不存在就不开启）；示例见 live_sync.example.json
+LIVE_SYNC_CONFIG_PATH = Path(__file__).with_name("live_sync.json")
+LIVE_SYNC_FILES = ("live.txt", "live.status.json")
+
+
+class LiveSyncRunner:
+    """后台线程：定时运行 tvbox_live_sync（远程没变化就跳过），结果放在 data_dir，
+    由本服务的 /tvbox/live.txt、/tvbox/live.status.json 提供给电视和 Homepage。
+    mirror_dirs：额外复制一份过去（给还在读旧地址的 APK 过渡用）。"""
+
+    def __init__(self, data_dir: Path, interval_seconds: int, first_delay_seconds: int, mirror_dirs: list[Path]):
+        self.data_dir = data_dir
+        self.interval_seconds = interval_seconds
+        self.first_delay_seconds = first_delay_seconds
+        self.mirror_dirs = mirror_dirs
+        self.output = data_dir / "live.txt"
+        self._run_lock = threading.Lock()
+
+    @classmethod
+    def from_config(cls, path: Path) -> "LiveSyncRunner | None":
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        if not config.get("enabled", True):
+            return None
+        base = path.parent
+        return cls(
+            data_dir=(base / config.get("dataDir", "data")).expanduser(),
+            interval_seconds=max(60, int(config.get("intervalMinutes", 15)) * 60),
+            first_delay_seconds=max(0, int(config.get("firstDelaySeconds", 30))),
+            mirror_dirs=[Path(item).expanduser() for item in config.get("mirrorDirs", [])],
+        )
+
+    def start(self) -> None:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        tvbox_live_sync.LOG_PATH = str(self.data_dir / "sync.log")
+        threading.Thread(target=self._loop, name="live-sync", daemon=True).start()
+
+    def file_path(self, name: str) -> Path | None:
+        return self.data_dir / name if name in LIVE_SYNC_FILES else None
+
+    def _loop(self) -> None:
+        time.sleep(self.first_delay_seconds)
+        while True:
+            started = time.monotonic()
+            self.run_once()
+            time.sleep(max(1.0, self.interval_seconds - (time.monotonic() - started)))
+
+    def run_once(self, force: bool = False) -> None:
+        if not self._run_lock.acquire(blocking=False):
+            return  # 上一轮还没扫完
+        try:
+            tvbox_live_sync.main(["--output", str(self.output), *(["--force"] if force else [])])
+        except BaseException as error:  # noqa: BLE001 - SystemExit / 网络错误都不能让线程退出
+            tvbox_live_sync.log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} 同步失败：{error!r}")
+        finally:
+            self._run_lock.release()
+        self._mirror()
+
+    def _mirror(self) -> None:
+        for directory in self.mirror_dirs:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                for name in LIVE_SYNC_FILES:
+                    source = self.data_dir / name
+                    if source.exists():
+                        temp = directory / f".{name}.tmp"
+                        shutil.copyfile(source, temp)
+                        temp.replace(directory / name)
+            except OSError as error:
+                tvbox_live_sync.log(f"复制到 {directory} 失败：{error}")
 SERVICE_NAME = "tvbox-platform-live"
-SERVICE_VERSION = 5
+SERVICE_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -182,6 +257,7 @@ class LiveService:
             ),
         }
 
+        self.live_sync = LiveSyncRunner.from_config(LIVE_SYNC_CONFIG_PATH)
         self.bilibili_login = BilibiliLogin(
             cookie_path=BILIBILI_COOKIE_PATH,
             on_cookie_changed=self._set_bilibili_cookie,
@@ -369,6 +445,9 @@ def create_handler(service: LiveService):
                         ),
                     )
                     return
+                if request.path.startswith("/tvbox/"):
+                    self._write_live_sync_file(request.path.removeprefix("/tvbox/"))
+                    return
                 if request.path == "/v1/bilibili/login/status":
                     self._write_json(HTTPStatus.OK, service.bilibili_login.status())
                     return
@@ -406,6 +485,20 @@ def create_handler(service: LiveService):
             except Exception:  # noqa: BLE001 - 服务端详细错误仅写入本机日志
                 traceback.print_exc()
                 self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "解析服务内部错误，请查看电脑终端日志"})
+
+        def _write_live_sync_file(self, name: str) -> None:
+            path = service.live_sync.file_path(name) if service.live_sync else None
+            if path is None or not path.exists():
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "直播源还没有生成"})
+                return
+            data = path.read_bytes()
+            content_type = "application/json" if name.endswith(".json") else "text/plain"
+            self.send_response(HTTPStatus.OK.value)
+            self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
 
         def _single_query(self, query: dict[str, list[str]], name: str) -> str:
             value = query.get(name, [""])[0].strip()
@@ -450,6 +543,9 @@ def main() -> None:
         request_timeout_seconds=max(1, args.timeout),
     )
     server = ThreadingHTTPServer((args.host, args.port), create_handler(service))
+    if service.live_sync is not None:
+        service.live_sync.start()
+        print(f"电视直播源同步：每 {service.live_sync.interval_seconds // 60} 分钟检查，GET /tvbox/live.txt", flush=True)
     print(f"{SERVICE_NAME} 已启动：http://{args.host}:{args.port}", flush=True)
     print("健康检查：GET /health", flush=True)
     print("频道目录：GET /v1/live/catalog", flush=True)

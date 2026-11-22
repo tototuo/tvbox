@@ -1,8 +1,9 @@
 """TVBox 电视直播源同步：拉远程 txt 直播源 → 逐条检测 → 去掉失效地址 → 按速度排序后输出。
 
-只用标准库，在 Mac mini 上由 crontab 定时运行：
+只用标准库。平时由解析服务 server.py 的后台线程定时调用（开关见 live_sync.example.json），
+电视从 http://<服务>:8868/tvbox/live.txt 读取；也可以单独手动运行：
 
-    tvbox_live_sync.py --output ~/Software/AriaNg/tvbox/live.txt
+    tvbox_live_sync.py --output /path/to/live.txt [--force]
 
 输出格式与远程源一致（「分组,#genre#」+「频道,地址$线路信息」），电视端解析逻辑不变。
 检测规则：
@@ -396,9 +397,9 @@ def download_extras(cache_dir: str) -> tuple[list[Entry], str]:
                 write_atomic(cache, text)
             except Exception as error:  # noqa: BLE001
                 if not os.path.exists(cache):
-                    print(f"补充源拉取失败且没有缓存（跳过）：{source}：{error}", flush=True)
+                    log(f"补充源拉取失败且没有缓存（跳过）：{source}：{error}")
                     continue
-                print(f"补充源拉取失败，用上次缓存：{source}：{error}", flush=True)
+                log(f"补充源拉取失败，用上次缓存：{source}：{error}")
                 with open(cache, encoding="utf-8") as handle:
                     text = handle.read()
             texts.append(text)
@@ -407,6 +408,16 @@ def download_extras(cache_dir: str) -> tuple[list[Entry], str]:
         # 只拿挑出来的行判断变化，补充源里别的频道变了不触发重扫
         raw_texts.extend(entry.raw for entry in group_entries)
     return entries, "\n".join(raw_texts)
+
+
+LOG_PATH: str | None = None  # 在解析服务里运行时写到这个文件（服务的标准输出是 /dev/null）
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+    if LOG_PATH:
+        with open(LOG_PATH, "a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
 
 
 def write_atomic(path: str, content: str) -> None:
@@ -451,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     unchanged = previous.get("sourceHash") == source_hash and os.path.exists(args.output)
     if unchanged and not args.force:
         save_status(status_path, previous, checkedAt=stamp, lastResult="跳过（远程未变化）")
-        print(f"{stamp} 远程直播源没有变化，跳过本轮扫描", flush=True)
+        log(f"{stamp} 远程直播源没有变化，跳过本轮扫描")
         return 0
     entries = parse_entries(text) + extra_entries
     urls = list(dict.fromkeys(entry.url for entry in entries if entry.url))
@@ -466,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
     previous_alive = int(previous.get("aliveUrls") or 0)
     if not alive or (previous_alive and len(alive) < previous_alive * MIN_KEEP_RATIO):
         save_status(status_path, previous, checkedAt=stamp, lastResult=f"保留上次（本次只有 {len(alive)} 个可用）")
-        print(f"{stamp} 可用 {len(alive)}/{len(urls)}，比上次 {previous_alive} 少太多，保留上次结果", flush=True)
+        log(f"{stamp} 可用 {len(alive)}/{len(urls)}，比上次 {previous_alive} 少太多，保留上次结果")
         return 1
 
     write_atomic(args.output, content)
@@ -484,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
         "medianMbps": round(statistics.median(alive.values()) * 8 / 1e6, 1),
     }
     write_atomic(status_path, json.dumps(status, ensure_ascii=False, indent=2) + "\n")
-    print(f"{stamp} 来源 {source}：可用 {len(alive)}/{len(urls)} 个地址，{channels} 个频道，带宽中位数 {status['medianMbps']} Mbps，用时 {status['seconds']}s", flush=True)
+    log(f"{stamp} 来源 {source}：可用 {len(alive)}/{len(urls)} 个地址，{channels} 个频道，带宽中位数 {status['medianMbps']} Mbps，用时 {status['seconds']}s")
     return 0
 
 

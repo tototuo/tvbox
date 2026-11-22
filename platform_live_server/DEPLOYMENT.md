@@ -356,6 +356,21 @@ https://live.example.com
 - 服务只负责解析和短时缓存，视频由 TVBox 直接访问平台 CDN。
 - 解析返回的 URL 是临时地址，不能长期保存或写入公开缓存。
 
+## 八点五、电视直播源同步（可选）
+
+同一个服务还可以定时过滤电视「电视」页用的 txt 直播源（`tvbox_live_sync.py`）：拉远程源 → 远程没变化就跳过 →
+有变化才检测全部地址（分片必须是真媒体、直播必须在更新）→ 去掉失效线路、按实测带宽排序，再补充浙江地方台分组。
+
+开启方法：把 `live_sync.example.json` 复制成 `live_sync.json`（已在 .gitignore），按需修改后重启服务。
+
+- `intervalMinutes`：检查间隔，默认 15 分钟；`firstDelaySeconds`：启动后多久跑第一轮
+- `dataDir`：结果目录（相对本目录），包含 `live.txt`、`live.status.json`、`sync.log`
+- `mirrorDirs`：额外复制一份结果到这些目录（给还在读旧地址的客户端过渡用），不需要就留空
+
+接口：`GET /tvbox/live.txt`（电视直播源）、`GET /tvbox/live.status.json`（上次检查时间、结果、可用地址数等）。
+APK 编译时把 `TVBOX_LIVE_SOURCE_URLS` 的第一个地址设成 `http://<服务地址>:8868/tvbox/live.txt`，
+后面保留作者的源做备用。手动强制重扫：`python tvbox_live_sync.py --output data/live.txt --force`。
+
 ## 九、常见问题
 
 ### 1. TVBox 显示“测试服务未配置”
