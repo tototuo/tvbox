@@ -7,7 +7,7 @@ from unittest import mock
 
 import tvbox_live_sync
 
-from tvbox_live_sync import build_output, first_uri, looks_like_html, parse_entries, stream_url
+from tvbox_live_sync import build_output, first_uri, is_encrypted, looks_like_media, looks_like_text, parse_entries, stream_url
 
 SAMPLE = """央视卫视,#genre#
 CCTV1,http://a/1.m3u8$LR•IPV4•29『线路1』
@@ -47,8 +47,22 @@ class LiveSyncTest(unittest.TestCase):
     def test_helpers(self):
         self.assertEqual(first_uri("#EXTM3U\n#EXTINF:5,\nseg1.ts\nseg2.ts"), "seg1.ts")
         self.assertIsNone(first_uri("#EXTM3U\n#EXT-X-ENDLIST"))
-        self.assertTrue(looks_like_html(b"<!DOCTYPE html><html>"))
-        self.assertFalse(looks_like_html(b"FLV\x01"))
+        ts = (b"\x47" + b"\x00" * 187) * 3
+        self.assertTrue(looks_like_media(ts))
+        self.assertTrue(looks_like_media(b"\x00\x01" + ts))  # 前面带少量垃圾字节
+        self.assertTrue(looks_like_media(b"FLV\x01\x05"))
+        self.assertTrue(looks_like_media(b"ID3\x04\x00"))
+        self.assertTrue(looks_like_media(b"\x00\x00\x00\x18ftypiso5"))
+        # 返回 200 的文字 / 网页都不算
+        self.assertFalse(looks_like_media("链接请求出错".encode()))
+        self.assertFalse(looks_like_media(b"sign error"))
+        self.assertFalse(looks_like_media(b"<!DOCTYPE html><html>"))
+        self.assertFalse(looks_like_media(b"Gone"))
+        self.assertFalse(looks_like_media(b""))
+        self.assertTrue(is_encrypted('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="k"\nseg.ts'))
+        self.assertFalse(is_encrypted("#EXTM3U\n#EXT-X-KEY:METHOD=NONE\nseg.ts"))
+        self.assertTrue(looks_like_text(b"sign error"))
+        self.assertFalse(looks_like_text(bytes(range(128, 256))))
 
 
 class SkipUnchangedTest(unittest.TestCase):

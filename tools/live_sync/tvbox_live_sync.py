@@ -8,7 +8,9 @@
 检测规则：
 - m3u8：读播放列表；主列表就跟进第一个子列表；再下载第一个分片的开头，分片拿不到算失效
   （实测很多线路列表能打开、分片 404）
-- 其他（flv / ts 直连等）：200 且开头不是 HTML 才算可用
+- 其他（flv / ts 直连等）：200 且开头是真正的媒体数据才算可用
+- 分片和直连流的开头必须像视频（TS / FLV / MP4 / ID3），「sign error」「链接请求出错」
+  这类返回 200 的文字一律算失效
 保护：本次可用数比上次少一半以上（多半是网络问题）时保留上次结果，不覆盖。
 省流：远程内容（sha256）与上次扫描时相同且输出文件还在，就跳过这一轮；--force 强制重扫。
 """
@@ -131,7 +133,7 @@ class Checker:
         data, final_url = self.fetch(url, PROBE_BYTES * 64)
         head = data[:PROBE_BYTES].lstrip()
         if not head.startswith(b"#EXTM3U"):
-            return bool(head) and not looks_like_html(head)
+            return looks_like_media(data)
         playlist = data.decode("utf-8", "replace")
         for _ in range(3):  # 主列表 → 子列表，最多跟两层
             uri = first_uri(playlist)
@@ -140,7 +142,9 @@ class Checker:
             target = urllib.parse.urljoin(final_url, uri)
             if "#EXT-X-STREAM-INF" not in playlist:
                 segment, _ = self.fetch(target, PROBE_BYTES)
-                return bool(segment) and not looks_like_html(segment.lstrip())
+                if is_encrypted(playlist):  # 加密分片是随机字节，只要求不是文字 / 网页
+                    return bool(segment) and not looks_like_text(segment)
+                return looks_like_media(segment)
             sub, final_url = self.fetch(target, PROBE_BYTES * 64)
             playlist = sub.decode("utf-8", "replace")
             if not playlist.lstrip().startswith("#EXTM3U"):
@@ -148,9 +152,40 @@ class Checker:
         return False
 
 
-def looks_like_html(head: bytes) -> bool:
-    lowered = head[:64].lower()
-    return lowered.startswith((b"<!doctype", b"<html", b"<?xml", b"{")) or b"<html" in lowered
+TS_PACKET = 188
+
+
+def is_encrypted(playlist: str) -> bool:
+    return any(
+        line.startswith("#EXT-X-KEY") and "METHOD=NONE" not in line.upper()
+        for line in playlist.splitlines()
+    )
+
+
+def looks_like_text(data: bytes) -> bool:
+    try:
+        data[:256].decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def looks_like_media(data: bytes) -> bool:
+    """开头是 TS / FLV / MP4 / ID3 / ADTS 等媒体数据。服务器声明什么类型不重要，只看内容。"""
+    if not data:
+        return False
+    if data.startswith((b"FLV", b"ID3")) or data[4:8] in (b"ftyp", b"styp", b"moof", b"sidx"):
+        return True
+    if data[:2] in (b"\xff\xf1", b"\xff\xf9") or data.startswith(b"\x00\x00\x01\xba"):
+        return True
+    # TS：0x47 同步字节每 188 字节出现一次；允许前面有少量垃圾字节
+    for offset in range(min(len(data), TS_PACKET)):
+        if data[offset] != 0x47:
+            continue
+        follow = offset + TS_PACKET
+        if follow < len(data) and data[follow] == 0x47:
+            return True
+    return False
 
 
 def first_uri(playlist: str) -> str | None:
