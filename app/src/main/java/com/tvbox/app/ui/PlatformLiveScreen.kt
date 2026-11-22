@@ -530,7 +530,7 @@ private fun PlatformLiveImageCard(
                     .align(Alignment.BottomEnd)
                     .padding(end = 8.dp, bottom = 8.dp)
                     .size(44.dp)
-                    .tvFocusScale(shape = MaterialTheme.shapes.small, focusedBorder = Color.White)
+                    .tvFocusScale(shape = MaterialTheme.shapes.small)
                     .clip(MaterialTheme.shapes.small)
                     .onFocusChanged { starFocused = it.isFocused }
                     .background(if (starFocused) MaterialTheme.colorScheme.primary else Color(0xCC101010))
