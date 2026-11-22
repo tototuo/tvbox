@@ -62,12 +62,17 @@ class SkipUnchangedTest(unittest.TestCase):
             with mock.patch.object(tvbox_live_sync, "download_source", return_value=("src", SAMPLE)), \
                     mock.patch.object(tvbox_live_sync.Checker, "check", return_value=0.1) as check:
                 code = tvbox_live_sync.main(["--output", output, *extra])
+                with open(os.path.join(directory, "live.status.json"), encoding="utf-8") as handle:
+                    self.last_status = json.load(handle)
                 with open(output, encoding="utf-8") as handle:
                     return code, check.call_count, handle.read()
 
     def test_skips_when_remote_unchanged(self):
         same = hashlib.sha256(SAMPLE.encode("utf-8")).hexdigest()
         self.assertEqual(self.run_main(same), (0, 0, "old"))
+        self.assertEqual(self.last_status["lastResult"], "跳过（远程未变化）")
+        self.assertEqual(self.last_status["aliveUrls"], 1)  # 保留上次统计
+        self.assertIn("checkedAt", self.last_status)
 
     def test_scans_when_remote_changed_or_forced(self):
         same = hashlib.sha256(SAMPLE.encode("utf-8")).hexdigest()

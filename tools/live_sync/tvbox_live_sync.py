@@ -194,6 +194,11 @@ def read_status(path: str) -> dict:
         return {}
 
 
+def save_status(path: str, previous: dict, **fields) -> None:
+    """只更新检查时间和结果，保留上次扫描的统计（Homepage 卡片据此判断脚本还在跑）。"""
+    write_atomic(path, json.dumps({**previous, **fields}, ensure_ascii=False, indent=2) + "\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", required=True, help="输出的 txt 直播源路径")
@@ -211,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     unchanged = previous.get("sourceHash") == source_hash and os.path.exists(args.output)
     if unchanged and not args.force:
+        save_status(status_path, previous, checkedAt=stamp, lastResult="跳过（远程未变化）")
         print(f"{stamp} 远程直播源没有变化，跳过本轮扫描", flush=True)
         return 0
     entries = parse_entries(text)
@@ -225,12 +231,15 @@ def main(argv: list[str] | None = None) -> int:
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     previous_alive = int(previous.get("aliveUrls") or 0)
     if not alive or (previous_alive and len(alive) < previous_alive * MIN_KEEP_RATIO):
+        save_status(status_path, previous, checkedAt=stamp, lastResult=f"保留上次（本次只有 {len(alive)} 个可用）")
         print(f"{stamp} 可用 {len(alive)}/{len(urls)}，比上次 {previous_alive} 少太多，保留上次结果", flush=True)
         return 1
 
     write_atomic(args.output, content)
     status = {
         "updatedAt": stamp,
+        "checkedAt": stamp,
+        "lastResult": "已更新",
         "source": source,
         "sourceHash": source_hash,
         "totalUrls": len(urls),
