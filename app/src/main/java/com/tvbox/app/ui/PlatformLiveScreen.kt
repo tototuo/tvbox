@@ -629,7 +629,9 @@ private fun PlatformLiveLoadMoreCard(loading: Boolean, text: String, onClick: ()
             .clip(shape)
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
             .background(if (focused) Color(0xFF252525) else MaterialTheme.colorScheme.surface)
-            .clickable(enabled = !loading, onClick = onClick)
+            // 加载中也保持可点击：禁用会让卡片丢焦点，系统把焦点挪到别的房间并滚动页面（日志确认的跳动原因）。
+            // 重复点击由 ViewModel 忽略
+            .clickable(onClick = { if (!loading) onClick() })
             .focusable(),
     ) {
         Box(
