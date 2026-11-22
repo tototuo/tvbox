@@ -324,7 +324,7 @@ private fun PlatformLiveRoomsScreen(
             item(key = "load-more") {
                 PlatformLiveLoadMoreCard(
                     loading = state.platformLiveLoadingMore,
-                    text = "加载更多（${state.platformLiveRoomPage}/${state.platformLiveRoomPageCount}）",
+                    text = "已加载 ${state.platformLiveRoomPage}/${state.platformLiveRoomPageCount} 页",
                     onClick = actions::loadMorePlatformLiveRooms,
                 )
             }
@@ -618,6 +618,8 @@ private fun PlatformLiveImageCard(
 
 @Composable
 private fun PlatformLiveLoadMoreCard(loading: Boolean, text: String, onClick: () -> Unit) {
+    // 和直播间卡片同样的结构和高度（16:9 区域 + 两行字）：加载后新房间正好填进这个位置，
+    // 光标移过去不需要任何滚动
     var focused by remember { mutableStateOf(false) }
     val shape = MaterialTheme.shapes.medium
     Column(
@@ -628,13 +630,36 @@ private fun PlatformLiveLoadMoreCard(loading: Boolean, text: String, onClick: ()
             .onFocusChanged { focused = it.isFocused || it.hasFocus }
             .background(if (focused) Color(0xFF252525) else MaterialTheme.colorScheme.surface)
             .clickable(enabled = !loading, onClick = onClick)
-            .focusable()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .focusable(),
     ) {
-        if (loading) CircularProgressIndicator(modifier = Modifier.size(28.dp))
-        Text(text = if (loading) "正在加载" else text, style = MaterialTheme.typography.titleSmall)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (loading) {
+                CircularProgressIndicator(modifier = Modifier.size(36.dp))
+            } else {
+                Text(text = "＋", style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Text(
+            text = if (loading) "正在加载…" else "加载更多",
+            modifier = Modifier.padding(start = 12.dp, top = 10.dp, end = 12.dp),
+            style = MaterialTheme.typography.titleSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = text,
+            modifier = Modifier.padding(start = 12.dp, top = 3.dp, end = 12.dp, bottom = 12.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
