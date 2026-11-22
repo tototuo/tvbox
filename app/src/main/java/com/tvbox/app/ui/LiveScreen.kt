@@ -403,15 +403,20 @@ private fun LivePlayerScreen(
                     return@onPreviewKeyEvent event.nativeKeyEvent.keyCode in LIVE_PLAYER_KEYS
                 }
                 when (event.nativeKeyEvent.keyCode) {
-                    AndroidKeyEvent.KEYCODE_DPAD_LEFT,
-                    AndroidKeyEvent.KEYCODE_CHANNEL_DOWN,
-                    -> {
+                    // 左右键换线路，频道 +/- 换频道
+                    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                        actions.playPreviousLiveLine()
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        actions.playNextLiveLine()
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_CHANNEL_DOWN -> {
                         actions.playPreviousLiveChannel()
                         true
                     }
-                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-                    AndroidKeyEvent.KEYCODE_CHANNEL_UP,
-                    -> {
+                    AndroidKeyEvent.KEYCODE_CHANNEL_UP -> {
                         actions.playNextLiveChannel()
                         true
                     }
