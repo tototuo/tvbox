@@ -1828,6 +1828,15 @@ class TvBoxViewModel(
         resolvePlatformLiveRoom(forceRefresh = true)
     }
 
+    /** 手动切换 CDN 线路（上下键），首尾循环；同一清晰度，只是换服务器。 */
+    fun switchPlatformLiveCandidate(delta: Int) {
+        val stream = _state.value.platformLiveStream ?: return
+        if (stream.candidates.size < 2 || _state.value.platformLiveResolving) return
+        val next = Math.floorMod(stream.activeCandidateIndex + delta, stream.candidates.size)
+        platformLiveRecoveryCount = 0
+        _state.update { it.copy(platformLiveError = null, platformLiveStream = stream.withActiveCandidate(next)) }
+    }
+
     fun recoverPlatformLiveChannel() {
         val state = _state.value
         val stream = state.platformLiveStream ?: run {

@@ -703,7 +703,9 @@ private fun PlatformLivePlayerScreen(
             .background(Color.Black)
             .focusRequester(playerFocusRequester)
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
+                if (event.type != KeyEventType.KeyUp) {
+                    return@onPreviewKeyEvent event.nativeKeyEvent.keyCode in PLATFORM_LIVE_PLAYER_KEYS
+                }
                 when (event.nativeKeyEvent.keyCode) {
                     AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
                         actions.playPreviousPlatformLiveRoom()
@@ -711,6 +713,17 @@ private fun PlatformLivePlayerScreen(
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
                         actions.playNextPlatformLiveRoom()
+                        true
+                    }
+                    // 上下键换 CDN 线路
+                    AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                        actions.switchPlatformLiveCandidate(-1)
+                        badgeVisible = true
+                        true
+                    }
+                    AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        actions.switchPlatformLiveCandidate(1)
+                        badgeVisible = true
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_CENTER,
@@ -842,3 +855,10 @@ private fun bilibiliLoginStatusLine(login: BilibiliLoginStatus?, error: String?)
         else -> "未登录 · 只能看超清 720p" to muted
     }
 }
+
+private val PLATFORM_LIVE_PLAYER_KEYS = setOf(
+    AndroidKeyEvent.KEYCODE_DPAD_LEFT,
+    AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+    AndroidKeyEvent.KEYCODE_DPAD_UP,
+    AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+)
