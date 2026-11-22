@@ -12,6 +12,8 @@
 - 分片和直连流的开头必须像视频（TS / FLV / MP4 / ID3），「sign error」「链接请求出错」
   这类返回 200 的文字一律算失效
 保护：本次可用数比上次少一半以上（多半是网络问题）时保留上次结果，不覆盖。
+排序：同一频道按实测下载带宽从高到低排（m3u8 下载第一个完整分片，直连流读几秒），
+  排第一的就是 App 里的线路 1。
 省流：远程内容（sha256）与上次扫描时相同且输出文件还在，就跳过这一轮；--force 强制重扫。
 """
 from __future__ import annotations
@@ -21,6 +23,7 @@ import hashlib
 import json
 import os
 import ssl
+import statistics
 import sys
 import tempfile
 import time
@@ -35,6 +38,9 @@ DEFAULT_SOURCES = [
 ]
 USER_AGENT = "Mozilla/5.0 (Linux; Android 9; BRAVIA) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 PROBE_BYTES = 2048
+PLAYLIST_MAX_BYTES = 512 * 1024
+SPEED_MAX_BYTES = 4 * 1024 * 1024  # 测速最多下载 4MB（一个高清分片一般 1~4MB）
+SPEED_MAX_SECONDS = 6.0  # 或最多 6 秒，慢线路不拖长扫描
 MIN_KEEP_RATIO = 0.5
 
 
@@ -71,7 +77,8 @@ def parse_entries(text: str) -> list[Entry]:
 
 
 def build_output(entries: list[Entry], alive: dict[str, float]) -> tuple[str, int]:
-    """去掉失效和重复线路；同一频道内按响应时间从快到慢排；没有线路的分组整个去掉。"""
+    """alive：地址 → 下载带宽（字节/秒）。去掉失效和重复线路；同一频道内按带宽从高到低排；
+    没有线路的分组整个去掉。"""
     out: list[str] = []
     kept = 0
     group_line: str | None = None
@@ -93,7 +100,7 @@ def build_output(entries: list[Entry], alive: dict[str, float]) -> tuple[str, in
                 by_channel[channel].append(raw)
         out.append(group_line)
         for channel in order:
-            lines = sorted(by_channel[channel], key=lambda raw: alive[stream_url(raw.split(",", 1)[1])])
+            lines = sorted(by_channel[channel], key=lambda raw: -alive[stream_url(raw.split(",", 1)[1])])
             out.extend(lines)
             kept += len(lines)
 
@@ -120,36 +127,54 @@ class Checker:
             data = response.read(limit) if limit else response.read(512 * 1024)
             return data, response.geturl()
 
-    def check(self, url: str) -> float | None:
-        """可用返回耗时（秒），失效返回 None。"""
+    def download(self, url: str) -> tuple[bytes, int, float, str]:
+        """边下边计时，到 SPEED_MAX_BYTES / SPEED_MAX_SECONDS / 结束为止。
+        返回（前 PLAYLIST_MAX_BYTES 字节，总字节数，耗时含建连，最终地址）。"""
         started = time.monotonic()
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
+        with urllib.request.urlopen(request, timeout=self.timeout, context=self.ssl_context) as response:
+            if response.status >= 400:
+                raise OSError(f"HTTP {response.status}")
+            kept = bytearray()
+            total = 0
+            while total < SPEED_MAX_BYTES and time.monotonic() - started < SPEED_MAX_SECONDS:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if len(kept) < PLAYLIST_MAX_BYTES:
+                    kept += chunk[: PLAYLIST_MAX_BYTES - len(kept)]
+            return bytes(kept), total, max(time.monotonic() - started, 1e-3), response.geturl()
+
+    def check(self, url: str) -> float | None:
+        """可用返回下载带宽（字节/秒），失效返回 None。"""
         try:
-            ok = self._check(url)
+            return self._check(url)
         except Exception:  # noqa: BLE001 - 任何网络/解析错误都算失效
             return None
-        return time.monotonic() - started if ok else None
 
-    def _check(self, url: str) -> bool:
-        data, final_url = self.fetch(url, PROBE_BYTES * 64)
-        head = data[:PROBE_BYTES].lstrip()
-        if not head.startswith(b"#EXTM3U"):
-            return looks_like_media(data)
+    def _check(self, url: str) -> float | None:
+        data, total, elapsed, final_url = self.download(url)
+        if not data[:PROBE_BYTES].lstrip().startswith(b"#EXTM3U"):
+            return total / elapsed if looks_like_media(data) else None  # flv / ts 直连
         playlist = data.decode("utf-8", "replace")
         for _ in range(3):  # 主列表 → 子列表，最多跟两层
             uri = first_uri(playlist)
             if uri is None:
-                return False
+                return None
             target = urllib.parse.urljoin(final_url, uri)
             if "#EXT-X-STREAM-INF" not in playlist:
-                segment, _ = self.fetch(target, PROBE_BYTES)
+                segment, total, elapsed, _ = self.download(target)
                 if is_encrypted(playlist):  # 加密分片是随机字节，只要求不是文字 / 网页
-                    return bool(segment) and not looks_like_text(segment)
-                return looks_like_media(segment)
-            sub, final_url = self.fetch(target, PROBE_BYTES * 64)
+                    ok = bool(segment) and not looks_like_text(segment)
+                else:
+                    ok = looks_like_media(segment)
+                return total / elapsed if ok else None
+            sub, final_url = self.fetch(target, PLAYLIST_MAX_BYTES)
             playlist = sub.decode("utf-8", "replace")
             if not playlist.lstrip().startswith("#EXTM3U"):
-                return False
-        return False
+                return None
+        return None
 
 
 TS_PACKET = 188
@@ -259,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     checker = Checker(args.timeout)
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         results = dict(zip(urls, pool.map(checker.check, urls)))
-    alive = {url: seconds for url, seconds in results.items() if seconds is not None}
+    alive = {url: speed for url, speed in results.items() if speed is not None}
     content, kept_lines = build_output(entries, alive)
     channels = len({entry.raw.split(",", 1)[0].strip() for entry in entries if entry.url in alive})
 
@@ -282,9 +307,10 @@ def main(argv: list[str] | None = None) -> int:
         "keptLines": kept_lines,
         "channels": channels,
         "seconds": round(time.time() - started, 1),
+        "medianMbps": round(statistics.median(alive.values()) * 8 / 1e6, 1),
     }
     write_atomic(status_path, json.dumps(status, ensure_ascii=False, indent=2) + "\n")
-    print(f"{stamp} 来源 {source}：可用 {len(alive)}/{len(urls)} 个地址，{channels} 个频道，用时 {status['seconds']}s", flush=True)
+    print(f"{stamp} 来源 {source}：可用 {len(alive)}/{len(urls)} 个地址，{channels} 个频道，带宽中位数 {status['medianMbps']} Mbps，用时 {status['seconds']}s", flush=True)
     return 0
 
 

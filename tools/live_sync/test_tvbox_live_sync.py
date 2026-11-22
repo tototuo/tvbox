@@ -31,7 +31,8 @@ class LiveSyncTest(unittest.TestCase):
         self.assertEqual(len([e for e in entries if e.url]), 5)
 
     def test_drops_dead_lines_sorts_by_speed_and_empty_groups(self):
-        alive = {"http://a/1.m3u8": 2.0, "http://b/1.m3u8": 0.5, "http://c/2.m3u8": 1.0}
+        # 值是下载带宽（字节/秒），越大越靠前
+        alive = {"http://a/1.m3u8": 1e5, "http://b/1.m3u8": 2e6, "http://c/2.m3u8": 5e5}
         content, kept = build_output(parse_entries(SAMPLE), alive)
         self.assertEqual(kept, 3)
         self.assertEqual(
