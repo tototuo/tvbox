@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items as rowItems
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import com.tvbox.app.ui.components.ErrorState
 import com.tvbox.app.ui.components.LoadingState
 import com.tvbox.app.ui.components.PageSurface
+import com.tvbox.app.ui.components.PosterGridCells
+import com.tvbox.app.ui.components.posterTextBlockHeight
 import com.tvbox.app.ui.components.tvFocusScale
 import com.tvbox.app.ui.theme.TvLayout
 
@@ -106,6 +108,7 @@ fun AiRecommendScreen(
             }
             Spacer(modifier = Modifier.height(12.dp))
             AiQuickPromptRow(
+                prompts = state.appSettings.aiQuickPrompts,
                 enabled = inputEnabled,
                 onPromptClick = { prompt -> actions.submitAiRecommendation(prompt) },
             )
@@ -134,21 +137,33 @@ fun AiRecommendScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                     }
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = TvLayout.PosterGridMinWidth),
-                        contentPadding = PaddingValues(bottom = 24.dp),
-                        horizontalArrangement = Arrangement.spacedBy(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(22.dp),
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(state.aiResults) { item ->
-                            AiRecommendationCard(
-                                item = item,
-                                resolving = state.aiResolvingKeyword == item.recommendation.searchKeyword.ifBlank {
-                                    item.recommendation.name
-                                },
-                                onClick = { actions.openAiRecommendation(item.recommendation) },
-                            )
+                    val cardTextHeight = posterTextBlockHeight(
+                        lines = listOf(MaterialTheme.typography.titleMedium) +
+                            List(4) { MaterialTheme.typography.bodySmall },
+                        verticalPadding = 38.dp,
+                    )
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        LazyVerticalGrid(
+                            columns = PosterGridCells(
+                                minSize = TvLayout.PosterGridMinWidth,
+                                viewportHeight = maxHeight,
+                                posterAspectRatio = AI_CARD_PLACEHOLDER_ASPECT_RATIO,
+                                textBlockHeight = cardTextHeight,
+                            ),
+                            contentPadding = PaddingValues(bottom = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(22.dp),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            items(state.aiResults) { item ->
+                                AiRecommendationCard(
+                                    item = item,
+                                    resolving = state.aiResolvingKeyword == item.recommendation.searchKeyword.ifBlank {
+                                        item.recommendation.name
+                                    },
+                                    onClick = { actions.openAiRecommendation(item.recommendation) },
+                                )
+                            }
                         }
                     }
                 }
@@ -159,6 +174,7 @@ fun AiRecommendScreen(
 
 @Composable
 private fun AiQuickPromptRow(
+    prompts: List<String>,
     enabled: Boolean,
     onPromptClick: (String) -> Unit,
 ) {
@@ -167,7 +183,7 @@ private fun AiQuickPromptRow(
         contentPadding = PaddingValues(end = 8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        rowItems(aiQuickPrompts) { prompt ->
+        rowItems(prompts) { prompt ->
             AiActionButton(
                 text = prompt,
                 onClick = { onPromptClick(prompt) },
@@ -264,7 +280,8 @@ private fun AiRecommendationCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(2f / 3f)
+                // AI 推荐没有海报，只是片名占位；用横版比例，否则卡片太高，网格只能加列把卡片挤窄
+                .aspectRatio(AI_CARD_PLACEHOLDER_ASPECT_RATIO)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
             Text(
@@ -327,11 +344,4 @@ private fun com.tvbox.app.domain.AiRecommendationItem.metaText(): String {
         .ifBlank { "AI 推荐" }
 }
 
-private val aiQuickPrompts = listOf(
-    "悬疑电视剧",
-    "最近高分电影",
-    "动画电影",
-    "韩国犯罪剧",
-    "搞笑综艺",
-    "适合小孩看",
-)
+private const val AI_CARD_PLACEHOLDER_ASPECT_RATIO = 16f / 9f

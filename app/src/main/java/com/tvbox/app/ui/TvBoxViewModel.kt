@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.tvbox.app.data.AppSettingsRepository
 import com.tvbox.app.BuildConfig
 import com.tvbox.app.data.AiConfigServer
+import com.tvbox.app.data.AiPromptsConfigServer
 import com.tvbox.app.data.AiRequestConfig
 import com.tvbox.app.data.AiRecommendationRepository
 import com.tvbox.app.data.AppUpdateRepository
@@ -14,6 +15,8 @@ import com.tvbox.app.data.DefaultLiveRepository
 import com.tvbox.app.data.DefaultDoubanHotRepository
 import com.tvbox.app.data.DoubanHotRepository
 import com.tvbox.app.data.HistoryRepository
+import com.tvbox.app.data.InMemoryLiveLineMemoryRepository
+import com.tvbox.app.data.LiveLineMemoryRepository
 import com.tvbox.app.data.LiveRepository
 import com.tvbox.app.data.MovieRepository
 import com.tvbox.app.data.PlaybackHealthRepository
@@ -34,6 +37,10 @@ import com.tvbox.app.domain.Category
 import com.tvbox.app.domain.CustomVideoApiLine
 import com.tvbox.app.domain.DoubanHotItem
 import com.tvbox.app.domain.LiveChannel
+import com.tvbox.app.domain.parseAiQuickPrompts
+import com.tvbox.app.domain.lineMemoryKey
+import com.tvbox.app.domain.nextLiveLineAfterFailure
+import com.tvbox.app.domain.preferredLiveLineIndex
 import com.tvbox.app.domain.Movie
 import com.tvbox.app.domain.PlaybackAgent
 import com.tvbox.app.domain.PlaybackAgentDecision
@@ -141,6 +148,8 @@ data class TvBoxUiState(
     val liveChannels: List<LiveChannel> = emptyList(),
     val liveChannelIndex: Int = 0,
     val liveLineIndex: Int = 0,
+    /** 本轮自动换线的起点：失败后从这里往后绕一圈，回到起点就停。 */
+    val liveLineStartIndex: Int = 0,
     val liveLoading: Boolean = false,
     val liveError: String? = null,
     val platformLiveDestination: PlatformLiveDestination = PlatformLiveDestination.Sites,
@@ -186,6 +195,10 @@ data class TvBoxUiState(
     val aiConfigServerUrl: String? = null,
     val aiConfigServerError: String? = null,
     val aiConfigSavedMessage: String? = null,
+    val aiPromptsDialogVisible: Boolean = false,
+    val aiPromptsServerUrl: String? = null,
+    val aiPromptsServerError: String? = null,
+    val aiPromptsSavedMessage: String? = null,
     val videoApiConfigDialogVisible: Boolean = false,
     val videoApiConfigServerUrl: String? = null,
     val videoApiConfigServerError: String? = null,
@@ -215,6 +228,7 @@ class TvBoxViewModel(
     private val playbackHealthRepository: PlaybackHealthRepository = DefaultPlaybackHealthRepositoryPlaceholder(),
     private val historyRepository: HistoryRepository,
     private val platformLiveFavoritesRepository: PlatformLiveFavoritesRepository,
+    private val liveLineMemoryRepository: LiveLineMemoryRepository = InMemoryLiveLineMemoryRepository(),
 ) : ViewModel() {
     private val _state = MutableStateFlow(TvBoxUiState())
     val state: StateFlow<TvBoxUiState> = _state.asStateFlow()
@@ -237,6 +251,7 @@ class TvBoxViewModel(
     private var updateInstallStateJob: Job? = null
     private var settingsWriteJob: Job? = null
     private var aiConfigServer: AiConfigServer? = null
+    private var aiPromptsServer: AiPromptsConfigServer? = null
     private var videoApiConfigServer: VideoApiConfigServer? = null
     private var phoneSearchServer: PhoneSearchServer? = null
     private var phoneSearchStartJob: Job? = null
@@ -274,7 +289,7 @@ class TvBoxViewModel(
             }
             loadHistory()
             refreshHome()
-            if (normalizedSettings.checkUpdatesOnStartup) {
+            if (normalizedSettings.checkUpdatesOnStartup && BuildConfig.UPDATE_MANIFEST_URL.isNotBlank()) {
                 checkForAppUpdate()
             }
         }
@@ -718,6 +733,53 @@ class TvBoxViewModel(
 
     fun closeAiConfigDialog() {
         closeAiConfigDialog(stopOnly = false)
+    }
+
+    fun openAiPromptsDialog() {
+        aiPromptsServer?.stop()
+        // 回调在网络线程上，切回主线程再改设置（saveSettings 不是线程安全的）
+        val server = AiPromptsConfigServer(viewModelScope) { text -> viewModelScope.launch { applyAiPromptsFromPhone(text) } }
+        aiPromptsServer = server
+        _state.update {
+            it.copy(
+                aiPromptsDialogVisible = true,
+                aiPromptsServerUrl = null,
+                aiPromptsServerError = null,
+                aiPromptsSavedMessage = null,
+            )
+        }
+        viewModelScope.launch {
+            runCatching { server.start(_state.value.appSettings.aiQuickPrompts) }
+                .onSuccess { session -> _state.update { it.copy(aiPromptsServerUrl = session.url) } }
+                .onFailure { error ->
+                    _state.update { it.copy(aiPromptsServerError = "启动手机编辑服务失败：${error.userMessage()}") }
+                }
+        }
+    }
+
+    fun closeAiPromptsDialog() {
+        aiPromptsServer?.stop()
+        aiPromptsServer = null
+        _state.update {
+            it.copy(
+                aiPromptsDialogVisible = false,
+                aiPromptsServerUrl = null,
+                aiPromptsServerError = null,
+                aiPromptsSavedMessage = null,
+            )
+        }
+    }
+
+    private fun applyAiPromptsFromPhone(text: String) {
+        val prompts = parseAiQuickPrompts(text)
+        val settings = _state.value.appSettings.copy(aiQuickPrompts = prompts)
+        saveSettings(settings)
+        _state.update {
+            it.copy(
+                appSettings = settings,
+                aiPromptsSavedMessage = "已保存 ${prompts.size} 个快捷推荐词：${prompts.joinToString("、")}",
+            )
+        }
     }
 
     fun openVideoApiConfigDialog() {
@@ -1397,11 +1459,29 @@ class TvBoxViewModel(
         _state.update { state ->
             val channels = state.liveChannels
             if (channels.isEmpty()) return@update state
-            state.copy(
-                liveChannelIndex = (state.liveChannelIndex + 1) % channels.size,
-                liveLineIndex = 0,
-            )
+            state.withLiveChannel((state.liveChannelIndex + 1) % channels.size)
         }
+    }
+
+    /** 切到某个频道时从它上次播放成功的线路开始。 */
+    private fun TvBoxUiState.withLiveChannel(index: Int): TvBoxUiState {
+        val channelIndex = index.coerceIn(0, (liveChannels.lastIndex).coerceAtLeast(0))
+        val lineIndex = liveChannels.getOrNull(channelIndex)
+            ?.let { preferredLiveLineIndex(it, liveLineMemoryRepository.rememberedLineUrl(it.lineMemoryKey())) }
+            ?: 0
+        return copy(
+            liveChannelIndex = channelIndex,
+            liveLineIndex = lineIndex,
+            liveLineStartIndex = lineIndex,
+        )
+    }
+
+    /** 某条线路已经稳定播放：记下来，下次打开这个频道直接从它开始。 */
+    fun rememberLiveLine(lineUrl: String) {
+        val state = _state.value
+        val channel = state.liveChannels.getOrNull(state.liveChannelIndex) ?: return
+        if (channel.lines.none { it.url == lineUrl }) return
+        liveLineMemoryRepository.rememberLineUrl(channel.lineMemoryKey(), lineUrl)
     }
 
     fun updateDeviceMode(mode: DeviceMode) {
@@ -1449,19 +1529,18 @@ class TvBoxViewModel(
             val channels = state.liveChannels
             if (channels.isEmpty()) return@update state
             val previousIndex = if (state.liveChannelIndex <= 0) channels.lastIndex else state.liveChannelIndex - 1
-            state.copy(
-                liveChannelIndex = previousIndex,
-                liveLineIndex = 0,
-            )
+            state.withLiveChannel(previousIndex)
         }
     }
 
+    // 手动换线后，自动换线的起点跟着变成手动选的那条
     fun playNextLiveLine(): Boolean {
         val state = _state.value
         val lines = state.liveChannels.getOrNull(state.liveChannelIndex)?.lines.orEmpty()
         if (lines.size <= 1) return false
         _state.update {
-            it.copy(liveLineIndex = (it.liveLineIndex + 1) % lines.size)
+            val nextIndex = (it.liveLineIndex + 1) % lines.size
+            it.copy(liveLineIndex = nextIndex, liveLineStartIndex = nextIndex)
         }
         return true
     }
@@ -1472,7 +1551,7 @@ class TvBoxViewModel(
         if (lines.size <= 1) return false
         _state.update {
             val previousIndex = if (it.liveLineIndex <= 0) lines.lastIndex else it.liveLineIndex - 1
-            it.copy(liveLineIndex = previousIndex)
+            it.copy(liveLineIndex = previousIndex, liveLineStartIndex = previousIndex)
         }
         return true
     }
@@ -1480,8 +1559,8 @@ class TvBoxViewModel(
     fun advanceLiveLineAfterFailure(): Boolean {
         val state = _state.value
         val lines = state.liveChannels.getOrNull(state.liveChannelIndex)?.lines.orEmpty()
-        val nextIndex = state.liveLineIndex + 1
-        if (nextIndex !in lines.indices) return false
+        val nextIndex = nextLiveLineAfterFailure(state.liveLineIndex, state.liveLineStartIndex, lines.size)
+            ?: return false
         _state.update { it.copy(liveLineIndex = nextIndex) }
         return true
     }
@@ -1641,10 +1720,7 @@ class TvBoxViewModel(
         _state.update { state ->
             val channels = state.liveChannels
             if (channels.isEmpty()) return@update state
-            state.copy(
-                liveChannelIndex = index.coerceIn(0, channels.lastIndex),
-                liveLineIndex = 0,
-            )
+            state.withLiveChannel(index)
         }
     }
 
@@ -2135,11 +2211,9 @@ class TvBoxViewModel(
                     _state.update {
                         it.copy(
                             liveChannels = channels,
-                            liveChannelIndex = it.liveChannelIndex.coerceIn(0, (channels.lastIndex).coerceAtLeast(0)),
-                            liveLineIndex = 0,
                             liveLoading = false,
                             liveError = if (channels.isEmpty()) "没有可用直播频道" else null,
-                        )
+                        ).withLiveChannel(it.liveChannelIndex)
                     }
                 }
                 .onFailure { error ->
@@ -2414,6 +2488,8 @@ class TvBoxViewModel(
         closePhoneSearchDialog()
         aiConfigServer?.stop()
         aiConfigServer = null
+        aiPromptsServer?.stop()
+        aiPromptsServer = null
         videoApiConfigServer?.stop()
         videoApiConfigServer = null
         super.onCleared()

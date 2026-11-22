@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -163,6 +164,7 @@ private fun LivePlayerScreen(
     var bufferingCheckNonce by remember { mutableIntStateOf(0) }
     var automaticSwitchLineUrl by remember { mutableStateOf<String?>(null) }
     val latestAutomaticSwitchLineUrl = rememberUpdatedState(automaticSwitchLineUrl)
+    var playingLineUrl by remember { mutableStateOf<String?>(null) }
 
     fun showPrompt(message: String) {
         promptMessage = message
@@ -231,6 +233,12 @@ private fun LivePlayerScreen(
                 switchLiveLineAfterIssue()
             }
 
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playingLineUrl = if (isPlaying) latestLineUrl.value else null
+                // 一出画面就记住：用户左右换台很快，等几秒再记经常来不及
+                if (isPlaying) actions.rememberLiveLine(latestLineUrl.value)
+            }
+
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (!playWhenReady) {
                     bufferMonitor.onPaused()
@@ -277,6 +285,7 @@ private fun LivePlayerScreen(
     }
 
     LaunchedEffect(currentLine.url) {
+        playingLineUrl = null
         bufferMonitor.onMediaChanged()
         playbackWatchdog.onMediaChanged()
         bufferingLineUrl = null
@@ -285,6 +294,11 @@ private fun LivePlayerScreen(
         player.setMediaItem(MediaItem.fromUri(currentLine.url))
         player.prepare()
         session.preparePlayback(player)
+    }
+
+    // 线路信息一直显示到这条线路真正开始播放，再停留一会儿后隐藏
+    LaunchedEffect(playingLineUrl, currentLine.url) {
+        if (playingLineUrl != currentLine.url) return@LaunchedEffect
         delay(CHANNEL_BADGE_HIDE_DELAY_MS)
         channelBadgeVisible = false
     }
@@ -384,7 +398,10 @@ private fun LivePlayerScreen(
                 )
             }
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
+                // 下面这些键都在 KeyUp 时处理；KeyDown 也要吞掉，否则系统焦点导航会把焦点移走
+                if (event.type != KeyEventType.KeyUp) {
+                    return@onPreviewKeyEvent event.nativeKeyEvent.keyCode in LIVE_PLAYER_KEYS
+                }
                 when (event.nativeKeyEvent.keyCode) {
                     AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
                         actions.playPreviousLiveChannel()
@@ -403,6 +420,9 @@ private fun LivePlayerScreen(
                         if (session.interrupted) {
                             player.seekToDefaultPosition()
                             session.play(player)
+                        } else if (channelListVisible) {
+                            // 列表里上下已经直接换台，确定键不再做选择，只让列表继续显示
+                            keepChannelListVisibleWhileBrowsing()
                         } else showChannelList()
                         true
                     }
@@ -526,6 +546,8 @@ private fun LivePlayerScreen(
                 },
                 onInteraction = ::keepChannelListVisibleWhileBrowsing,
                 modifier = channelPanelModifier,
+                // 电视上列表只做展示，上下键始终由播放器换台；行能拿焦点的话按键会被列表吃掉
+                rowsFocusable = !isTelevision,
             )
         }
         if (!isTelevision && mobileControlsVisible && !channelListVisible) {
@@ -619,6 +641,7 @@ private fun LiveChannelList(
     onChannelClick: (Int) -> Unit,
     onInteraction: () -> Unit,
     modifier: Modifier = Modifier,
+    rowsFocusable: Boolean = true,
 ) {
     val listState = rememberLazyListState()
     val safeSelectedIndex = selectedIndex.coerceIn(0, channels.lastIndex)
@@ -681,6 +704,7 @@ private fun LiveChannelList(
                         channel = channel,
                         selected = index == safeSelectedIndex,
                         onClick = { onChannelClick(index) },
+                        focusable = rowsFocusable,
                     )
                 }
             }
@@ -694,6 +718,7 @@ private fun LiveChannelRow(
     channel: LiveChannel,
     selected: Boolean,
     onClick: () -> Unit,
+    focusable: Boolean = true,
 ) {
     var focused by remember { mutableStateOf(false) }
     val accent = Color(0xFF7AE2BA)
@@ -707,6 +732,7 @@ private fun LiveChannelRow(
             .background(background)
             .border(1.dp, if (focused) accent else Color.Transparent, shape)
             .onFocusChanged { focused = it.isFocused }
+            .focusProperties { canFocus = focusable }
             .clickable(onClick = onClick)
             .heightIn(min = 48.dp)
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -834,3 +860,16 @@ private const val LIVE_CUMULATIVE_BUFFER_THRESHOLD_MS = 12_000L
 private const val LIVE_PROGRESS_SAMPLE_INTERVAL_MS = 1_000L
 private const val MOBILE_PORTRAIT_CHANNEL_PANEL_HEIGHT_FRACTION = 0.62f
 private const val MOBILE_LANDSCAPE_CHANNEL_PANEL_WIDTH_FRACTION = 0.44f
+
+private val LIVE_PLAYER_KEYS = setOf(
+    AndroidKeyEvent.KEYCODE_DPAD_LEFT,
+    AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+    AndroidKeyEvent.KEYCODE_DPAD_UP,
+    AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+    AndroidKeyEvent.KEYCODE_DPAD_CENTER,
+    AndroidKeyEvent.KEYCODE_ENTER,
+    AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+    AndroidKeyEvent.KEYCODE_MEDIA_PLAY,
+    AndroidKeyEvent.KEYCODE_MEDIA_PAUSE,
+) + (AndroidKeyEvent.KEYCODE_0..AndroidKeyEvent.KEYCODE_9) +
+    (AndroidKeyEvent.KEYCODE_NUMPAD_0..AndroidKeyEvent.KEYCODE_NUMPAD_9)

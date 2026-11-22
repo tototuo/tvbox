@@ -2,6 +2,8 @@
 
 import android.content.Context
 import com.tvbox.app.domain.AppSettings
+import com.tvbox.app.domain.DEFAULT_AI_QUICK_PROMPTS
+import com.tvbox.app.domain.normalizeAiQuickPrompts
 import com.tvbox.app.domain.DeviceMode
 import com.tvbox.app.domain.CustomVideoApiLine
 import com.tvbox.app.domain.TvFontScale
@@ -40,6 +42,7 @@ class SharedAppSettingsRepository(context: Context) : AppSettingsRepository {
                 ?: AppSettings().aiModelName,
             aiApiKey = prefs.getString(KEY_AI_API_KEY, AppSettings().aiApiKey)
                 ?: AppSettings().aiApiKey,
+            aiQuickPrompts = readAiQuickPrompts(),
             checkUpdatesOnStartup = prefs.getBoolean(KEY_CHECK_UPDATES_ON_STARTUP, true),
             playbackAgentAutoSwitchEnabled = prefs.getBoolean(KEY_PLAYBACK_AGENT_AUTO_SWITCH, true),
             videoScaleMode = VideoScaleMode.fromStorageKey(prefs.getString(KEY_VIDEO_SCALE_MODE, null)),
@@ -61,6 +64,7 @@ class SharedAppSettingsRepository(context: Context) : AppSettingsRepository {
             .putString(KEY_AI_PROVIDER_ID, settings.aiProviderId)
             .putString(KEY_AI_MODEL_NAME, settings.aiModelName)
             .putString(KEY_AI_API_KEY, settings.aiApiKey)
+            .putString(KEY_AI_QUICK_PROMPTS, json.encodeToString(settings.aiQuickPrompts))
             .putBoolean(KEY_CHECK_UPDATES_ON_STARTUP, settings.checkUpdatesOnStartup)
             .putBoolean(KEY_PLAYBACK_AGENT_AUTO_SWITCH, settings.playbackAgentAutoSwitchEnabled)
             .putString(KEY_VIDEO_SCALE_MODE, settings.videoScaleMode.storageKey)
@@ -69,6 +73,12 @@ class SharedAppSettingsRepository(context: Context) : AppSettingsRepository {
             .putString(KEY_INTRO_SKIP_OVERRIDES, json.encodeToString(settings.introSkipOverrides))
             .apply()
         settings
+    }
+
+    private fun readAiQuickPrompts(): List<String> {
+        val raw = prefs.getString(KEY_AI_QUICK_PROMPTS, null) ?: return DEFAULT_AI_QUICK_PROMPTS
+        return runCatching { normalizeAiQuickPrompts(json.decodeFromString<List<String>>(raw)) }
+            .getOrDefault(DEFAULT_AI_QUICK_PROMPTS)
     }
 
     private fun readCustomVideoApiLines(): List<CustomVideoApiLine> {
@@ -86,6 +96,7 @@ class SharedAppSettingsRepository(context: Context) : AppSettingsRepository {
         const val KEY_AI_PROVIDER_ID = "ai_provider_id"
         const val KEY_AI_MODEL_NAME = "ai_model_name"
         const val KEY_AI_API_KEY = "ai_api_key"
+        const val KEY_AI_QUICK_PROMPTS = "ai_quick_prompts"
         const val KEY_CHECK_UPDATES_ON_STARTUP = "check_updates_on_startup"
         const val KEY_PLAYBACK_AGENT_AUTO_SWITCH = "playback_agent_auto_switch"
         const val KEY_VIDEO_SCALE_MODE = "video_scale_mode"

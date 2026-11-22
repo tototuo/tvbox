@@ -38,6 +38,7 @@ class ParseRoomIdTest(unittest.TestCase):
                     "multirates": [{"rate": 4, "name": "原画"}],
                     "cdnsWithName": [{"cdn": "hw-h5"}, {"cdn": "tx-h5"}],
                 },
+                {"rate": 4},
                 {"rtmp_url": "https://hw.example", "rtmp_live": "live.flv?token=one"},
                 {"rtmp_url": "https://tx.example", "rtmp_live": "live.flv?token=two"},
             ],
@@ -69,7 +70,8 @@ class ParseRoomIdTest(unittest.TestCase):
                     ],
                     "cdnsWithName": [{"cdn": "hw-h5"}],
                 },
-                {"rtmp_url": "https://hw.example", "rtmp_live": "live.flv"},
+                {"rate": 4},
+                {"rate": 4, "rtmp_url": "https://hw.example", "rtmp_live": "live.flv"},
             ],
         )
 
@@ -77,7 +79,36 @@ class ParseRoomIdTest(unittest.TestCase):
 
         self.assertEqual(quality, "原画")
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(resolver._get_play_info.call_args_list[1].kwargs["rate"], 4)
+        self.assertEqual(resolver._get_play_info.call_args_list[2].kwargs["rate"], 4)
+
+    def test_uses_rate_that_actually_returns_best_stream(self):
+        """复现斗鱼实测：请求原画/蓝光/超清都降成 900k，请求高清反而给 4000k。"""
+        resolver = DouyuResolver()
+        resolver._get_play_args = Mock(return_value={"sign": "token"})
+        actual_by_request = {0: 2, 4: 2, 3: 2, 2: 4}
+
+        def play_info(room_id, *, play_args, cdn, rate):
+            if rate == -1:
+                return {
+                    "rate": 2,
+                    "multirates": [
+                        {"name": "原画2K60", "rate": 0, "bit": 12663},
+                        {"name": "蓝光4M", "rate": 4, "bit": 4000},
+                        {"name": "超清", "rate": 3, "bit": 2000},
+                        {"name": "高清", "rate": 2, "bit": 900},
+                    ],
+                    "cdnsWithName": [{"cdn": "hw-h5"}],
+                }
+            actual = actual_by_request[rate]
+            suffix = {2: "900", 4: "4000"}[actual]
+            return {"rate": actual, "rtmp_url": f"https://{cdn or 'probe'}.example", "rtmp_live": f"live_{suffix}.flv"}
+
+        resolver._get_play_info = Mock(side_effect=play_info)
+
+        quality, candidates = resolver._get_best_play_urls("475252")
+
+        self.assertEqual(quality, "蓝光4M")
+        self.assertEqual([candidate.url for candidate in candidates], ["https://hw-h5.example/live_4000.flv"])
 
     def test_maps_category_metadata_and_parent_name(self):
         resolver = DouyuResolver()

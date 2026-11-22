@@ -1,6 +1,7 @@
 ﻿package com.tvbox.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -47,6 +47,8 @@ import com.tvbox.app.ui.components.ErrorState
 import com.tvbox.app.ui.components.LoadingState
 import com.tvbox.app.ui.components.MoviePosterCard
 import com.tvbox.app.ui.components.PageSurface
+import com.tvbox.app.ui.components.PosterGridCells
+import com.tvbox.app.ui.components.posterTextBlockHeight
 import com.tvbox.app.ui.components.tvFocusScale
 import com.tvbox.app.ui.theme.TvColors
 import com.tvbox.app.ui.theme.TvLayout
@@ -135,10 +137,10 @@ fun SearchScreen(
                     enabled = !state.searchLoading,
                     modifier = Modifier.focusRequester(searchButtonFocus),
                 )
+                // 和输入框放同一行：电视只有 540dp 高，单独占一行会把下面的海报卡挤出屏幕
+                SearchActionButton(text = "手机扫码输入 · 菜单键", onClick = actions::openPhoneSearchDialog)
                 SearchActionButton(text = "返回", onClick = actions::goBack)
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            SearchActionButton(text = "手机扫码输入 · 菜单键", onClick = actions::openPhoneSearchDialog)
             Spacer(modifier = Modifier.height(16.dp))
             val searchProgress = state.searchTotalSources.takeIf { it > 0 }?.let { total ->
                 "已完成 ${state.searchCompletedSources}/$total 条线路 · 找到 ${state.searchResults.size} 个结果"
@@ -160,23 +162,34 @@ fun SearchScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                     }
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = TvLayout.PosterGridMinWidth),
-                        state = grid,
-                        contentPadding = PaddingValues(bottom = 24.dp),
-                        horizontalArrangement = Arrangement.spacedBy(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(22.dp),
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(state.searchResults, key = { "${it.apiLineId}-${it.id}" }) { movie ->
-                            MoviePosterCard(
-                                movie = movie,
-                                onClick = {
-                                    returnFocus.mark("${movie.apiLineId}:${movie.id}", state.searchResults.indexOf(movie))
-                                    actions.openDetail(movie.id, movie.apiLineId)
-                                },
-                                modifier = returnFocus.modifier("${movie.apiLineId}:${movie.id}", state.searchResults.indexOf(movie)),
-                            )
+                    val cardTextHeight = posterTextBlockHeight(
+                        lines = listOf(MaterialTheme.typography.titleSmall, MaterialTheme.typography.bodySmall),
+                        verticalPadding = 25.dp,
+                    )
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        LazyVerticalGrid(
+                            columns = PosterGridCells(
+                                minSize = TvLayout.PosterGridMinWidth,
+                                viewportHeight = maxHeight,
+                                posterAspectRatio = 2f / 3f,
+                                textBlockHeight = cardTextHeight,
+                            ),
+                            state = grid,
+                            contentPadding = PaddingValues(bottom = 24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(22.dp),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            items(state.searchResults, key = { "${it.apiLineId}-${it.id}" }) { movie ->
+                                MoviePosterCard(
+                                    movie = movie,
+                                    onClick = {
+                                        returnFocus.mark("${movie.apiLineId}:${movie.id}", state.searchResults.indexOf(movie))
+                                        actions.openDetail(movie.id, movie.apiLineId)
+                                    },
+                                    modifier = returnFocus.modifier("${movie.apiLineId}:${movie.id}", state.searchResults.indexOf(movie)),
+                                )
+                            }
                         }
                     }
                 }

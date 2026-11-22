@@ -732,6 +732,9 @@ private fun SettingsScreen(
         if (state.aiConfigDialogVisible) {
             AiConfigDialog(state = state, actions = actions)
         }
+        if (state.aiPromptsDialogVisible) {
+            AiPromptsDialog(state = state, actions = actions)
+        }
         if (state.videoApiConfigDialogVisible) {
             VideoApiConfigDialog(state = state, actions = actions)
         }
@@ -823,6 +826,12 @@ private fun SettingsScreen(
                         apiKey = state.appSettings.aiApiKey,
                         onProviderSelect = actions::updateAiProvider,
                         onOpenConfig = actions::openAiConfigDialog,
+                    )
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    SettingsActionButton(
+                        text = "AI 快捷推荐词：${state.appSettings.aiQuickPrompts.size} 个 · 手机扫码编辑",
+                        onClick = actions::openAiPromptsDialog,
                     )
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) {
@@ -1012,6 +1021,71 @@ private fun AiConfigDialog(
         },
         dismissButton = {
             TextButton(onClick = actions::closeAiConfigDialog) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun AiPromptsDialog(
+    state: TvBoxUiState,
+    actions: TvBoxViewModel,
+) {
+    val configUrl = state.aiPromptsServerUrl
+    AlertDialog(
+        onDismissRequest = actions::closeAiPromptsDialog,
+        title = { Text("手机扫码编辑快捷推荐词") },
+        text = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(22.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (configUrl == null) {
+                    Box(modifier = Modifier.size(220.dp), contentAlignment = Alignment.Center) {
+                        Text("正在启动编辑服务...")
+                    }
+                } else {
+                    val qrBitmap = remember(configUrl) { createQrBitmap(configUrl, 320) }
+                    Image(
+                        bitmap = qrBitmap.asImageBitmap(),
+                        contentDescription = "快捷推荐词编辑二维码",
+                        modifier = Modifier.size(220.dp),
+                    )
+                }
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(text = "使用手机扫描二维码", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = "或在同一局域网的手机浏览器访问地址：",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = configUrl ?: "正在生成地址...",
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "手机页面里一行一个编辑推荐词，确认后同步到电视；全部清空会恢复默认。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    state.aiPromptsSavedMessage?.let {
+                        Text(text = it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    state.aiPromptsServerError?.let {
+                        Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            SettingsActionButton(text = "完成", onClick = actions::closeAiPromptsDialog)
+        },
+        dismissButton = {
+            TextButton(onClick = actions::closeAiPromptsDialog) {
                 Text("取消")
             }
         },

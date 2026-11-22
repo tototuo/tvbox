@@ -31,6 +31,8 @@ val releaseKeyAlias = configProperty("TVBOX_RELEASE_KEY_ALIAS")
 val releaseKeyPassword = configProperty("TVBOX_RELEASE_KEY_PASSWORD")
 val aiApiKey = configProperty("TVBOX_AI_API_KEY")
 val platformLiveServiceUrl = configProperty("TVBOX_PLATFORM_LIVE_SERVICE_URL")
+// 在线更新清单地址；留空则关闭更新检查（自签名版本装不上作者的官方包）
+val updateManifestUrl = configProperty("TVBOX_UPDATE_MANIFEST_URL")
 val hasReleaseSigning = listOf(
     releaseStoreFile,
     releaseStorePassword,
@@ -50,6 +52,7 @@ android {
         versionName = "1.3.14"
         buildConfigField("String", "AI_API_KEY", aiApiKey.toBuildConfigString())
         buildConfigField("String", "PLATFORM_LIVE_SERVICE_URL", platformLiveServiceUrl.toBuildConfigString())
+        buildConfigField("String", "UPDATE_MANIFEST_URL", updateManifestUrl.toBuildConfigString())
     }
 
     signingConfigs {

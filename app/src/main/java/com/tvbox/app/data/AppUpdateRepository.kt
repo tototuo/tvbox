@@ -37,7 +37,7 @@ interface AppUpdateRepository {
 
 class DefaultAppUpdateRepository(
     context: Context,
-    private val manifestUrl: String = UPDATE_MANIFEST_URL,
+    private val manifestUrl: String = BuildConfig.UPDATE_MANIFEST_URL,
 ) : AppUpdateRepository {
     private val appContext = context.applicationContext
     private val downloadPrefs = appContext.getSharedPreferences("background_update", Context.MODE_PRIVATE)
@@ -54,6 +54,7 @@ class DefaultAppUpdateRepository(
         .build()
 
     override suspend fun checkForUpdate(currentVersionCode: Long): AppUpdate? = withContext(Dispatchers.IO) {
+        if (manifestUrl.isBlank()) throw IOException("此版本已关闭在线更新")
         val request = Request.Builder()
             .url(manifestUrl)
             .header("Cache-Control", "no-cache")
@@ -282,7 +283,6 @@ private data class UpdateManifestDto(
     @SerialName("changelog") val changelog: List<String> = emptyList(),
 )
 
-private const val UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/ZxxXinI/tvbox/main/update.json"
 private const val USER_AGENT = "TVBox-Android"
 
 @Serializable

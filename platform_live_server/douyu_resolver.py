@@ -266,40 +266,84 @@ class DouyuResolver:
             cdn="",
             rate=-1,
         )
-        qualities = self._parse_qualities(first_play_info)
+        tiers = self._parse_tiers(first_play_info)
         cdns = self._order_cdns(first_play_info.get("cdnsWithName", []))
-        if not qualities:
-            qualities = [(0, "自动")]
         if not cdns:
             cdns = [""]
+        request_rate, actual_rate = self._probe_best_rate(room_id, play_args, tiers)
+        quality_name = tiers[actual_rate][0] if actual_rate in tiers else "自动"
 
-        for rate, quality_name in qualities:
-            candidates: list[DouyuStreamCandidate] = []
-            seen_urls: set[str] = set()
-            for cdn in cdns:
-                try:
-                    play_info = self._get_play_info(
-                        room_id,
-                        play_args=play_args,
-                        cdn=cdn,
-                        rate=rate,
-                    )
-                    url = self._build_stream_url(play_info)
-                except (DouyuResolverError, KeyError, TypeError, ValueError):
-                    continue
-                if not url or url in seen_urls:
-                    continue
-                seen_urls.add(url)
-                candidates.append(
-                    DouyuStreamCandidate(
-                        cdn=cdn or "默认",
-                        url=url,
-                        protocol="hls" if ".m3u8" in url.lower() else "flv",
-                    ),
+        candidates: list[DouyuStreamCandidate] = []
+        fallback: list[DouyuStreamCandidate] = []
+        seen_urls: set[str] = set()
+        for cdn in cdns:
+            try:
+                play_info = self._get_play_info(
+                    room_id,
+                    play_args=play_args,
+                    cdn=cdn,
+                    rate=request_rate,
                 )
-            if candidates:
-                return quality_name, tuple(candidates)
+                url = self._build_stream_url(play_info)
+            except (DouyuResolverError, KeyError, TypeError, ValueError):
+                continue
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            candidate = DouyuStreamCandidate(
+                cdn=cdn or "默认",
+                url=url,
+                protocol="hls" if ".m3u8" in url.lower() else "flv",
+            )
+            # 个别 CDN 可能给出和探测结果不同的档位，档位对得上的排前面
+            returned = self._returned_rate(play_info, request_rate)
+            (candidates if returned == actual_rate else fallback).append(candidate)
+        candidates += fallback
+        if candidates:
+            return quality_name, tuple(candidates)
         return None, ()
+
+    def _probe_best_rate(
+        self,
+        room_id: str,
+        play_args: dict[str, str],
+        tiers: dict[int, tuple[str, int]],
+    ) -> tuple[int, int | None]:
+        """找出「请求哪个 rate 能拿到最高的实际画质」。
+
+        斗鱼对未登录请求会静默降档：实测请求蓝光/原画只给 900k 的高清流，
+        请求高清（rate=2）反而给 4000k 的蓝光流。所以不能按请求的档位名打标签，
+        要逐档请求一次，以返回里的 rate 为准挑最高的。
+        """
+
+        if not tiers:
+            return 0, None
+        ranked = sorted(tiers, key=lambda rate: self._tier_rank(rate, tiers), reverse=True)
+        best_request, best_actual = ranked[0], None
+        for rate in ranked:
+            try:
+                info = self._get_play_info(room_id, play_args=play_args, cdn="", rate=rate)
+            except (DouyuResolverError, KeyError, TypeError, ValueError):
+                continue
+            actual = self._returned_rate(info, rate)
+            if best_actual is None or self._tier_rank(actual, tiers) > self._tier_rank(best_actual, tiers):
+                best_request, best_actual = rate, actual
+            if actual == ranked[0]:
+                break
+        return best_request, best_actual
+
+    @staticmethod
+    def _returned_rate(play_info: dict, requested: int) -> int:
+        try:
+            return int(play_info.get("rate"))
+        except (TypeError, ValueError):
+            return requested
+
+    @staticmethod
+    def _tier_rank(rate: int, tiers: dict[int, tuple[str, int]]) -> tuple[int, int, int]:
+        # 先比码率；没有码率时 rate=0（原画）最高，其余 rate 越大越高
+        bit = tiers.get(rate, ("", -1))[1]
+        return bit, int(rate == 0), rate
 
     def _get_play_info(
         self,
@@ -423,14 +467,19 @@ class DouyuResolver:
         return value
 
     @staticmethod
-    def _parse_qualities(play_info: dict) -> list[tuple[int, str]]:
-        qualities = [
-            (int(item.get("rate") or 0), str(item.get("name") or "自动"))
-            for item in play_info.get("multirates", [])
-            if isinstance(item, dict)
-        ]
-        # 斗鱼 rate 数值越大代表越高画质；优先尝试最高档位，失败后再降级。
-        return sorted(qualities, key=lambda item: item[0], reverse=True)
+    def _parse_tiers(play_info: dict) -> dict[int, tuple[str, int]]:
+        """rate -> (档位名, 码率 kbps)；码率缺失记 0。"""
+        tiers: dict[int, tuple[str, int]] = {}
+        for item in play_info.get("multirates", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                rate = int(item.get("rate") or 0)
+                bit = int(item.get("bit") or 0)
+            except (TypeError, ValueError):
+                continue
+            tiers[rate] = (str(item.get("name") or "自动"), bit)
+        return tiers
 
     @staticmethod
     def _order_cdns(cdn_items: object) -> list[str]:

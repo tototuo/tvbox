@@ -10,6 +10,7 @@ data class AppSettings(
     val aiProviderId: String = AiProviders.default.id,
     val aiModelName: String = AiProviders.default.defaultModel,
     val aiApiKey: String = "",
+    val aiQuickPrompts: List<String> = DEFAULT_AI_QUICK_PROMPTS,
     val checkUpdatesOnStartup: Boolean = true,
     val playbackAgentAutoSwitchEnabled: Boolean = true,
     val videoScaleMode: VideoScaleMode = VideoScaleMode.Fit,
