@@ -163,22 +163,23 @@ private fun PlatformLiveParentCategoriesScreen(
         isEmpty = state.platformLiveParentCategories.isEmpty(),
         emptyMessage = "没有可用直播大分类",
         onRetry = actions::refreshPlatformLive,
-    ) {
-        if (site?.id == "bilibili") {
-            item(key = "bilibili-login") {
+        headerAction = if (site?.id == "bilibili") {
+            {
                 val login = state.bilibiliLogin
-                PlatformLiveTextCard(
-                    label = "B站账号",
-                    title = if (login?.loggedIn == true) "已登录 · 原画" else "扫码登录",
-                    subtitle = when {
-                        login?.loggedIn == true -> login.name.ifBlank { "已登录" }
-                        login?.expired == true -> "登录已过期，重新扫码可看原画"
-                        else -> "未登录只能看超清，登录后可看原画"
+                SettingsActionButton(
+                    text = when {
+                        login?.loggedIn == true -> "B站已登录 · 原画"
+                        login?.expired == true -> "B站登录已过期 · 重新扫码"
+                        else -> "扫码登录 B站 · 看原画"
                     },
                     onClick = actions::openBilibiliLoginDialog,
+                    selected = login?.loggedIn == true,
                 )
             }
-        }
+        } else {
+            null
+        },
+    ) {
         itemsIndexed(
             state.platformLiveParentCategories,
             key = { _, category -> category.id },
@@ -325,6 +326,7 @@ private fun PlatformLiveBrowseSurface(
     onRetry: () -> Unit,
     gridState: LazyGridState? = null,
     notice: String? = null,
+    headerAction: (@Composable () -> Unit)? = null, // 标题行最右边的按钮
     content: androidx.compose.foundation.lazy.grid.LazyGridScope.() -> Unit,
 ) {
     PageSurface { padding ->
@@ -347,13 +349,18 @@ private fun PlatformLiveBrowseSurface(
                 ) {
                     AnimatedVisibility(visible = headerVisible) {
                         Column {
-                            Text(text = title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                            Text(
-                                text = subtitle,
-                                modifier = Modifier.padding(top = 5.dp, bottom = 18.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = subtitle,
+                                        modifier = Modifier.padding(top = 5.dp, bottom = 18.dp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                }
+                                headerAction?.invoke()
+                            }
                             if (notice != null) {
                                 Text(text = notice, color = MaterialTheme.colorScheme.error)
                             }

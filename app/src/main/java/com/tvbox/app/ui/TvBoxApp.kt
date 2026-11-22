@@ -1306,7 +1306,7 @@ private fun TvConfirmDialog(
 }
 
 @Composable
-private fun SettingsActionButton(
+internal fun SettingsActionButton(
     text: String,
     onClick: () -> Unit,
     enabled: Boolean = true,

@@ -178,7 +178,7 @@ TVBOX_PLATFORM_LIVE_HUYA_COOKIE=
 # TVBOX_PLATFORM_LIVE_NODE=/usr/bin/node
 ```
 
-B站也可以不配环境变量，直接在电视上扫码登录：进入「直播 → 哔哩哔哩」，第一张卡片「B站账号 · 扫码登录」，
+B站也可以不配环境变量，直接在电视上扫码登录：进入「直播 → 哔哩哔哩」，标题行最右边的「扫码登录 B站」按钮，
 用 B站 App 扫码确认即可。服务端把 Cookie 保存到本目录的 `bilibili_cookie.txt`（权限 600，已在 .gitignore），
 优先于 `TVBOX_PLATFORM_LIVE_BILIBILI_COOKIE`；卡片里可以退出登录（删除该文件）。
 相关接口：`/v1/bilibili/login/status`、`/qrcode`、`/poll?key=`、`/logout`。
