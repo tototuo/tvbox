@@ -46,6 +46,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -284,7 +285,7 @@ private fun PlatformLiveRoomsScreen(
                 }
                 PlatformLiveTextCard(
                     title = "返回直播平台",
-                    subtitle = "在主播房间卡片上选择星星即可收藏",
+                    subtitle = "在直播间卡片上长按确认键（或按菜单键）即可收藏",
                     label = "收藏",
                     onClick = actions::goBack,
                     modifier = Modifier.padding(top = 20.dp).width(280.dp).focusRequester(emptyFavoriteFocusRequester),
@@ -295,7 +296,8 @@ private fun PlatformLiveRoomsScreen(
     }
     PlatformLiveBrowseSurface(
         title = if (favoritesMode) "收藏" else category?.name ?: "直播间",
-        subtitle = if (favoritesMode) "本机收藏的直播房间" else category?.parentName?.ifBlank { site?.name ?: "直播" } ?: site?.name ?: "直播",
+        subtitle = (if (favoritesMode) "本机收藏的直播房间" else category?.parentName?.ifBlank { site?.name ?: "直播" } ?: site?.name ?: "直播") +
+            if (favoritesMode) " · 长按确认键（或菜单键）取消收藏" else " · 长按确认键（或菜单键）收藏",
         loading = !favoritesMode && state.platformLiveLoading,
         error = if (favoritesMode) null else state.platformLiveError,
         isEmpty = state.platformLiveRooms.isEmpty(),
@@ -514,6 +516,8 @@ private fun PlatformLiveImageCard(
     modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // 遥控器：长按确认键或按菜单键 = 收藏 / 取消收藏（星星在卡片里，方向键移不到它上面）
+    var longPressHandled by remember { mutableStateOf(false) }
     val shape = MaterialTheme.shapes.medium
     Box(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -523,6 +527,29 @@ private fun PlatformLiveImageCard(
                 .clip(shape)
                 .onFocusChanged { focused = it.isFocused || it.hasFocus }
                 .background(if (focused) Color(0xFF252525) else MaterialTheme.colorScheme.surface)
+                .onPreviewKeyEvent { event ->
+                    if (onFavoriteClick == null) return@onPreviewKeyEvent false
+                    val native = event.nativeKeyEvent
+                    val isOk = native.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER || native.keyCode == AndroidKeyEvent.KEYCODE_ENTER
+                    when {
+                        native.keyCode == AndroidKeyEvent.KEYCODE_MENU -> {
+                            if (event.type == KeyEventType.KeyUp) onFavoriteClick()
+                            true
+                        }
+                        isOk && event.type == KeyEventType.KeyDown && native.repeatCount > 0 -> {
+                            if (!longPressHandled) {
+                                longPressHandled = true
+                                onFavoriteClick()
+                            }
+                            true
+                        }
+                        isOk && event.type == KeyEventType.KeyUp && longPressHandled -> {
+                            longPressHandled = false
+                            true // 长按松开不再当作点击进入直播间
+                        }
+                        else -> false
+                    }
+                }
                 .clickable(onClick = onClick)
                 .focusable(),
         ) {
@@ -572,6 +599,7 @@ private fun PlatformLiveImageCard(
                     .size(44.dp)
                     .tvFocusScale(shape = MaterialTheme.shapes.small)
                     .clip(MaterialTheme.shapes.small)
+                    .focusProperties { canFocus = false } // 只做标记；遥控器用长按确认 / 菜单键，手机可直接点
                     .onFocusChanged { starFocused = it.isFocused }
                     .background(if (starFocused) MaterialTheme.colorScheme.primary else Color(0xCC101010))
                     .semantics { contentDescription = if (favorite) "取消收藏 $title" else "收藏 $title" }
