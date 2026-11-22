@@ -14,6 +14,8 @@
 保护：本次可用数比上次少一半以上（多半是网络问题）时保留上次结果，不覆盖。
 排序：同一频道按实测下载带宽从高到低排（m3u8 下载第一个完整分片，直连流读几秒），
   排第一的就是 App 里的线路 1。
+补充：EXTRA_GROUPS 里的源只挑指定频道（如浙江地方台），合并别名后放进单独分组，一起检测排序；
+  补充源拉不到不影响主源。
 省流：远程内容（sha256）与上次扫描时相同且输出文件还在，就跳过这一轮；--force 强制重扫。
 """
 from __future__ import annotations
@@ -22,7 +24,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import ssl
+import subprocess
 import statistics
 import sys
 import tempfile
@@ -36,6 +40,41 @@ DEFAULT_SOURCES = [
     "http://20.205.10.127:8787/tvbox/result.txt",
     "https://tv.iill.top/m3u/Gather",
 ]
+@dataclass(frozen=True)
+class ExtraGroup:
+    """从补充源里挑出名字匹配 include 的频道，放进 group 分组。"""
+
+    group: str
+    sources: tuple[str, ...]
+    include: re.Pattern
+    exclude: re.Pattern
+    aliases: dict  # 同一个台的不同叫法 → 统一名字
+    order: tuple[str, ...]  # 分组内频道排序：先按这里的顺序，其余按名字
+
+
+EXTRA_GROUPS = [
+    ExtraGroup(
+        group="浙江地方",
+        sources=(
+            "https://cdn.jsdelivr.net/gh/Guovin/iptv-api@gd/output/result.txt",
+            "https://live.zbds.top/tv/iptv4.txt",
+        ),
+        include=re.compile(r"浙江|钱江|之江|杭州|宁波|温州|绍兴|嘉兴|湖州|金华|台州|丽水|衢州|舟山|义乌|平湖|遂昌"),
+        exclude=re.compile(r"卫视|少儿"),  # 浙江卫视、浙江少儿主源里已经有
+        aliases={
+            "浙江经济": "浙江经视", "浙江经济生活": "浙江经视",
+            "浙江钱江": "钱江都市", "浙江钱江频道": "钱江都市", "浙江钱江都市": "钱江都市",
+            "浙江教科": "浙江教科影视",
+            "浙江民生": "浙江民生休闲", "浙江休闲台": "浙江民生休闲",
+            "浙江公共新闻": "浙江新闻",
+            "绍兴电视台公共": "绍兴公共",
+            "浙江遂昌": "遂昌综合",
+        },
+        order=("浙江经视", "钱江都市", "浙江教科影视", "浙江民生休闲", "浙江新闻", "之江纪录",
+               "浙江国际", "浙江数码时代", "浙江教育", "浙江留学", "浙江生活"),
+    ),
+]
+EXTRA_SOURCE_TIMEOUT = 60  # live.zbds.top 很慢
 USER_AGENT = "Mozilla/5.0 (Linux; Android 9; BRAVIA) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 PROBE_BYTES = 2048
 PLAYLIST_MAX_BYTES = 512 * 1024
@@ -236,6 +275,83 @@ def download_source(sources: list[str], timeout: float) -> tuple[str, str]:
     raise RuntimeError(f"所有直播源都拉取失败：{last_error}")
 
 
+def iter_name_urls(text: str):
+    """同时支持 txt（名字,地址）和 m3u（#EXTINF ... ,名字 + 下一行地址）。"""
+    name = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("#EXTINF"):
+            name = line.rsplit(",", 1)[-1].strip()
+        elif line.startswith(("http://", "https://")) and name:
+            yield name, line
+            name = None
+        elif "," in line and not line.startswith("#"):
+            channel, source = line.split(",", 1)
+            url = stream_url(source)
+            if url.startswith(("http://", "https://")):
+                yield channel.strip(), url
+
+
+def pick_extra_entries(group: ExtraGroup, texts: list[str]) -> list[Entry]:
+    """从补充源文本里挑出该分组的频道，返回「分组行 + 线路行」。没有匹配返回空。"""
+    picked: dict[str, list[str]] = {}
+    seen: set[str] = set()
+    for text in texts:
+        for name, url in iter_name_urls(text):
+            if not group.include.search(name) or group.exclude.search(name) or url in seen:
+                continue
+            seen.add(url)
+            picked.setdefault(group.aliases.get(name, name), []).append(url)
+    if not picked:
+        return []
+    rank = {name: index for index, name in enumerate(group.order)}
+    names = sorted(picked, key=lambda name: (rank.get(name, len(rank)), name))
+    entries = [Entry(raw=f"{group.group},#genre#", group=group.group)]
+    for name in names:
+        entries.extend(Entry(raw=f"{name},{url}", url=url) for url in picked[name])
+    return entries
+
+
+def download_extras(cache_dir: str) -> tuple[list[Entry], str]:
+    """拉所有补充源，返回（条目，用于判断变化的原文）。
+    每个源成功拉到就存一份到 cache_dir；拉不到（live.zbds.top 经常超时）用上次的，
+    避免一会儿有一会儿没有、来回触发重扫。"""
+    checker = Checker(EXTRA_SOURCE_TIMEOUT)
+    entries: list[Entry] = []
+    raw_texts: list[str] = []
+    os.makedirs(cache_dir, exist_ok=True)
+    for group in EXTRA_GROUPS:
+        texts = []
+        for source in group.sources:
+            cache = os.path.join(cache_dir, hashlib.sha1(source.encode()).hexdigest()[:16] + ".txt")
+            try:
+                try:
+                    data, _ = checker.fetch(source, 4 * 1024 * 1024)
+                except Exception:  # noqa: BLE001
+                    # Python 偶尔卡在不通的地址上（握手超时），curl 会同时试多个地址
+                    data = subprocess.run(
+                        ["curl", "-sfL", "-m", str(EXTRA_SOURCE_TIMEOUT), "-A", USER_AGENT, source],
+                        capture_output=True, check=True, timeout=EXTRA_SOURCE_TIMEOUT + 5,
+                    ).stdout
+                text = data.decode("utf-8-sig", "replace")
+                if not any(True for _ in iter_name_urls(text)):
+                    raise ValueError("内容里没有线路")
+                write_atomic(cache, text)
+            except Exception as error:  # noqa: BLE001
+                if not os.path.exists(cache):
+                    print(f"补充源拉取失败且没有缓存（跳过）：{source}：{error}", flush=True)
+                    continue
+                print(f"补充源拉取失败，用上次缓存：{source}：{error}", flush=True)
+                with open(cache, encoding="utf-8") as handle:
+                    text = handle.read()
+            texts.append(text)
+        group_entries = pick_extra_entries(group, texts)
+        entries.extend(group_entries)
+        # 只拿挑出来的行判断变化，补充源里别的频道变了不触发重扫
+        raw_texts.extend(entry.raw for entry in group_entries)
+    return entries, "\n".join(raw_texts)
+
+
 def write_atomic(path: str, content: str) -> None:
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
@@ -272,14 +388,15 @@ def main(argv: list[str] | None = None) -> int:
     previous = read_status(status_path)
     started = time.time()
     source, text = download_source(args.source or DEFAULT_SOURCES, args.timeout)
-    source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    extra_entries, extra_text = download_extras(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".extra-cache"))
+    source_hash = hashlib.sha256((text + extra_text).encode("utf-8")).hexdigest()
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     unchanged = previous.get("sourceHash") == source_hash and os.path.exists(args.output)
     if unchanged and not args.force:
         save_status(status_path, previous, checkedAt=stamp, lastResult="跳过（远程未变化）")
         print(f"{stamp} 远程直播源没有变化，跳过本轮扫描", flush=True)
         return 0
-    entries = parse_entries(text)
+    entries = parse_entries(text) + extra_entries
     urls = list(dict.fromkeys(entry.url for entry in entries if entry.url))
     checker = Checker(args.timeout)
     with ThreadPoolExecutor(max_workers=args.workers) as pool:

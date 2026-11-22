@@ -66,6 +66,19 @@ class LiveSyncTest(unittest.TestCase):
         self.assertFalse(looks_like_text(bytes(range(128, 256))))
 
 
+class ExtraGroupTest(unittest.TestCase):
+    def test_picks_matching_channels_merges_aliases_and_orders(self):
+        group = tvbox_live_sync.EXTRA_GROUPS[0]
+        txt = "浙江频道,#genre#\n浙江经济生活,http://a/1.m3u8\n浙江卫视,http://w/1.m3u8\n湖南经视,http://h/1.m3u8\n嘉兴新闻综合,http://j/1.m3u8$x\n"
+        m3u = '#EXTM3U\n#EXTINF:-1 group-title="x",浙江经视\nhttp://b/1.m3u8\n#EXTINF:-1,浙江经济\nhttp://a/1.m3u8\n'
+        entries = tvbox_live_sync.pick_extra_entries(group, [txt, m3u])
+        self.assertEqual(
+            [e.raw for e in entries],
+            ["浙江地方,#genre#", "浙江经视,http://a/1.m3u8", "浙江经视,http://b/1.m3u8", "嘉兴新闻综合,http://j/1.m3u8"],
+        )
+        self.assertEqual(tvbox_live_sync.pick_extra_entries(group, ["CCTV1,http://x/1.m3u8"]), [])
+
+
 class SkipUnchangedTest(unittest.TestCase):
     def run_main(self, status_hash, *extra):
         with tempfile.TemporaryDirectory() as directory:
@@ -75,6 +88,7 @@ class SkipUnchangedTest(unittest.TestCase):
             with open(os.path.join(directory, "live.status.json"), "w", encoding="utf-8") as handle:
                 json.dump({"sourceHash": status_hash, "aliveUrls": 1}, handle)
             with mock.patch.object(tvbox_live_sync, "download_source", return_value=("src", SAMPLE)), \
+                    mock.patch.object(tvbox_live_sync, "download_extras", return_value=([], "")), \
                     mock.patch.object(tvbox_live_sync.Checker, "check", return_value=0.1) as check:
                 code = tvbox_live_sync.main(["--output", output, *extra])
                 with open(os.path.join(directory, "live.status.json"), encoding="utf-8") as handle:
