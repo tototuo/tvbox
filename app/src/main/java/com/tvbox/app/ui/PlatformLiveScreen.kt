@@ -644,6 +644,16 @@ private fun PlatformLivePlayerScreen(
     var playbackError by remember(stream?.url) { mutableStateOf<String?>(null) }
     var playerState by remember(stream?.url) { mutableIntStateOf(Player.STATE_IDLE) }
     var badgeVisible by remember { mutableStateOf(true) }
+    // 每次显示信息卡片都重新计时，到时间自动隐藏（按确认 / 换线路后也会消失）
+    var badgeShowCount by remember { mutableIntStateOf(0) }
+    val showBadge = {
+        badgeVisible = true
+        badgeShowCount++
+    }
+    LaunchedEffect(badgeShowCount) {
+        delay(PLATFORM_LIVE_BADGE_HIDE_DELAY_MS)
+        badgeVisible = false
+    }
 
     DisposableEffect(player) {
         if (player == null) {
@@ -653,7 +663,7 @@ private fun PlatformLivePlayerScreen(
                 override fun onPlayerError(error: PlaybackException) {
                     if (!session.canPlay) return
                     playbackError = error.localizedMessage ?: "平台直播播放失败"
-                    badgeVisible = true
+                    showBadge()
                     actions.recoverPlatformLiveChannel()
                 }
 
@@ -672,12 +682,10 @@ private fun PlatformLivePlayerScreen(
     LaunchedEffect(player, stream?.url) {
         if (player == null || stream == null) return@LaunchedEffect
         playbackError = null
-        badgeVisible = true
+        showBadge()
         player.setMediaItem(MediaItem.fromUri(stream.url))
         player.prepare()
         session.preparePlayback(player)
-        delay(PLATFORM_LIVE_BADGE_HIDE_DELAY_MS)
-        badgeVisible = false
     }
 
     LaunchedEffect(playerState, player, stream?.url, session.canPlay) {
@@ -688,7 +696,7 @@ private fun PlatformLivePlayerScreen(
                 delay(8_000L)
                 if (player.playbackState == Player.STATE_BUFFERING) {
                     playbackError = "直播连接中断，正在重新获取播放地址"
-                    badgeVisible = true
+                    showBadge()
                     actions.recoverPlatformLiveChannel()
                 }
             }
@@ -718,12 +726,12 @@ private fun PlatformLivePlayerScreen(
                     // 上下键换 CDN 线路
                     AndroidKeyEvent.KEYCODE_DPAD_UP -> {
                         actions.switchPlatformLiveCandidate(-1)
-                        badgeVisible = true
+                        showBadge()
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
                         actions.switchPlatformLiveCandidate(1)
-                        badgeVisible = true
+                        showBadge()
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_CENTER,
@@ -734,7 +742,7 @@ private fun PlatformLivePlayerScreen(
                             session.play(player)
                             actions.reconnectPlatformLiveChannel()
                         } else if (state.platformLiveError != null) actions.reconnectPlatformLiveChannel()
-                        badgeVisible = true
+                        showBadge()
                         true
                     }
                     else -> false
@@ -837,7 +845,7 @@ private fun formatOnline(value: Int): String {
     }
 }
 
-private const val PLATFORM_LIVE_BADGE_HIDE_DELAY_MS = 2_000L
+private const val PLATFORM_LIVE_BADGE_HIDE_DELAY_MS = 4_000L
 
 /** B站登录状态一行字：账号、Cookie 是否有效、到期日。 */
 @Composable
