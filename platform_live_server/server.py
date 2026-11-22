@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from bilibili_login import BilibiliLogin
 from bilibili_resolver import BilibiliResolver
 from douyin_resolver import DouyinResolver
 from douyu_resolver import DouyuResolver, DouyuResolverError, parse_room_id
@@ -36,8 +37,10 @@ from platform_common import (
 
 
 CATALOG_PATH = Path(__file__).with_name("catalog.json")
+# 电视上扫码登录 B站后的 Cookie（权限 600，已加入 .gitignore）
+BILIBILI_COOKIE_PATH = Path(__file__).with_name("bilibili_cookie.txt")
 SERVICE_NAME = "tvbox-platform-live"
-SERVICE_VERSION = 4
+SERVICE_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,11 @@ class StreamCache:
         with self._lock:
             self._values[key] = (now, resolved)
         return resolved, self.cache_seconds
+
+    def clear_site(self, site: str) -> None:
+        with self._lock:
+            for key in [key for key in self._values if key[0] == site.lower()]:
+                del self._values[key]
 
     def resolve_fresh(self, site: str, room_id: str, resolve) -> tuple[ResolvedLiveStream, int]:
         resolved = resolve(room_id)
@@ -173,6 +181,20 @@ class LiveService:
                 kww=os.environ.get("TVBOX_PLATFORM_LIVE_KUAISHOU_KWW", ""),
             ),
         }
+
+        self.bilibili_login = BilibiliLogin(
+            cookie_path=BILIBILI_COOKIE_PATH,
+            on_cookie_changed=self._set_bilibili_cookie,
+            timeout_seconds=request_timeout_seconds,
+        )
+        # 扫码登录保存的 Cookie 优先于环境变量
+        saved = self.bilibili_login.saved_cookie()
+        if saved:
+            self.adapters["bilibili"].cookie = saved
+
+    def _set_bilibili_cookie(self, cookie: str) -> None:
+        self.adapters["bilibili"].cookie = cookie or os.environ.get("TVBOX_PLATFORM_LIVE_BILIBILI_COOKIE", "").strip()
+        self.cache.clear_site("bilibili")  # 之前按未登录（超清）缓存的地址作废
 
     def sites(self) -> list[PlatformSite]:
         return [
@@ -347,6 +369,22 @@ def create_handler(service: LiveService):
                         ),
                     )
                     return
+                if request.path == "/v1/bilibili/login/status":
+                    self._write_json(HTTPStatus.OK, service.bilibili_login.status())
+                    return
+                if request.path == "/v1/bilibili/login/qrcode":
+                    self._write_json(HTTPStatus.OK, service.bilibili_login.generate())
+                    return
+                if request.path == "/v1/bilibili/login/poll":
+                    self._write_json(
+                        HTTPStatus.OK,
+                        service.bilibili_login.poll(self._single_query(query, "key")),
+                    )
+                    return
+                if request.path == "/v1/bilibili/login/logout":
+                    service.bilibili_login.logout()
+                    self._write_json(HTTPStatus.OK, {"loggedIn": False})
+                    return
                 if request.path == "/v1/live/resolve":
                     site = self._single_query(query, "site")
                     room_id = self._single_query(query, "roomId")
@@ -363,6 +401,8 @@ def create_handler(service: LiveService):
                 self._write_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
             except (DouyuResolverError, PlatformResolverError) as error:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except requests.RequestException as error:
+                self._write_json(HTTPStatus.BAD_GATEWAY, {"error": f"请求平台失败：{error}"})
             except Exception:  # noqa: BLE001 - 服务端详细错误仅写入本机日志
                 traceback.print_exc()
                 self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "解析服务内部错误，请查看电脑终端日志"})

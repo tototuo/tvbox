@@ -1002,6 +1002,76 @@ private fun AiConfigDialog(
     )
 }
 
+/** B站扫码登录：未登录显示官方二维码；已登录显示账号和“退出登录”。 */
+@Composable
+internal fun BilibiliLoginDialog(
+    state: TvBoxUiState,
+    actions: TvBoxViewModel,
+) {
+    val login = state.bilibiliLogin
+    val qrUrl = state.bilibiliLoginQrUrl
+    AlertDialog(
+        onDismissRequest = actions::closeBilibiliLoginDialog,
+        title = { Text(if (login?.loggedIn == true) "B站账号" else "扫码登录 B站") },
+        text = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(22.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (login?.loggedIn != true) {
+                    Box(
+                        modifier = Modifier
+                            .size(220.dp)
+                            .background(Color.White, RoundedCornerShape(8.dp))
+                            .padding(10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (qrUrl == null) {
+                            Text("…", color = Color.Black)
+                        } else {
+                            val qrBitmap = remember(qrUrl) { createQrBitmap(qrUrl, 320) }
+                            Image(bitmap = qrBitmap.asImageBitmap(), contentDescription = "B站登录二维码", modifier = Modifier.fillMaxSize())
+                        }
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    if (login?.loggedIn == true) {
+                        Text(
+                            text = "已登录：${login.name.ifBlank { "B站账号" }}",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            text = "B站直播会按登录账号解析，可以看原画 / 蓝光。登录信息只保存在解析服务那台电脑上。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Text(text = "打开 B站 App → 右上角扫一扫", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = "未登录只能看超清 720p；登录后可以看原画 / 蓝光。登录信息只保存在解析服务那台电脑上，不在电视里。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (state.bilibiliLoginMessage.isNotBlank()) {
+                        Text(
+                            text = state.bilibiliLoginMessage,
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            SettingsActionButton(text = "关闭", onClick = actions::closeBilibiliLoginDialog)
+        },
+        dismissButton = {
+            if (login?.loggedIn == true) {
+                SettingsActionButton(text = "退出登录", onClick = actions::logoutBilibili)
+            }
+        },
+    )
+}
+
 @Composable
 private fun AiPromptsDialog(
     state: TvBoxUiState,

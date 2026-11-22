@@ -3,6 +3,7 @@
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tvbox.app.data.AppSettingsRepository
+import com.tvbox.app.data.BilibiliLoginStatus
 import com.tvbox.app.BuildConfig
 import com.tvbox.app.data.AiConfigServer
 import com.tvbox.app.data.AiPromptsConfigServer
@@ -173,6 +174,11 @@ data class TvBoxUiState(
     val platformLiveResolving: Boolean = false,
     val platformLiveError: String? = null,
     val platformLiveStream: ResolvedPlatformLiveStream? = null,
+    // B站扫码登录（登录后解析服务能拿到原画）
+    val bilibiliLogin: BilibiliLoginStatus? = null,
+    val bilibiliLoginDialogVisible: Boolean = false,
+    val bilibiliLoginQrUrl: String? = null,
+    val bilibiliLoginMessage: String = "",
     val availableUpdate: AppUpdate? = null,
     val updateDialogVisible: Boolean = false,
     val updateChecking: Boolean = false,
@@ -246,6 +252,7 @@ class TvBoxViewModel(
     private var platformLiveRecoveryCount = 0
     private var platformLiveRecoveryInProgress = false
     private val platformLiveFavoritesMutex = Mutex()
+    private var bilibiliLoginJob: Job? = null
     private val historyWriteMutex = Mutex()
     private var aiJob: Job? = null
     private var updateJob: Job? = null
@@ -1584,6 +1591,82 @@ class TvBoxViewModel(
             )
         }
         loadPlatformLiveCategories(site)
+        if (site.id == BILIBILI_SITE_ID) refreshBilibiliLoginStatus()
+    }
+
+    fun refreshBilibiliLoginStatus() {
+        val serviceUrl = BuildConfig.PLATFORM_LIVE_SERVICE_URL
+        if (serviceUrl.isBlank()) return
+        viewModelScope.launch {
+            runCatching { platformLiveRepository.bilibiliLoginStatus(serviceUrl) }
+                .onSuccess { status -> _state.update { it.copy(bilibiliLogin = status) } }
+        }
+    }
+
+    /** 已登录时只显示账号和“退出登录”；未登录时取二维码并每 2 秒轮询，过期自动换新码。 */
+    fun openBilibiliLoginDialog() {
+        bilibiliLoginJob?.cancel()
+        val loggedIn = _state.value.bilibiliLogin?.loggedIn == true
+        _state.update {
+            it.copy(
+                bilibiliLoginDialogVisible = true,
+                bilibiliLoginQrUrl = null,
+                bilibiliLoginMessage = if (loggedIn) "" else "正在获取二维码…",
+            )
+        }
+        if (loggedIn) return
+        val serviceUrl = BuildConfig.PLATFORM_LIVE_SERVICE_URL
+        bilibiliLoginJob = viewModelScope.launch {
+            try {
+                repeat(BILIBILI_QR_MAX_ROUNDS) {
+                    val qrcode = platformLiveRepository.bilibiliLoginQrcode(serviceUrl)
+                    _state.update {
+                        it.copy(bilibiliLoginQrUrl = qrcode.url, bilibiliLoginMessage = "请用 B站 App 扫码，并在手机上确认登录")
+                    }
+                    while (true) {
+                        delay(BILIBILI_POLL_INTERVAL_MS)
+                        val poll = runCatching { platformLiveRepository.bilibiliLoginPoll(serviceUrl, qrcode.qrcodeKey) }
+                            .getOrNull() ?: continue
+                        when (poll.state) {
+                            "success" -> {
+                                _state.update { it.copy(bilibiliLoginQrUrl = null, bilibiliLoginMessage = poll.message) }
+                                refreshBilibiliLoginStatus()
+                                delay(1500)
+                                _state.update { it.copy(bilibiliLoginDialogVisible = false) }
+                                return@launch
+                            }
+                            "expired" -> break // 换一张新二维码
+                            "error" -> {
+                                _state.update { it.copy(bilibiliLoginMessage = poll.message) }
+                                return@launch
+                            }
+                            else -> _state.update { it.copy(bilibiliLoginMessage = poll.message) }
+                        }
+                    }
+                }
+                _state.update { it.copy(bilibiliLoginQrUrl = null, bilibiliLoginMessage = "二维码已过期，请重新打开") }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _state.update { it.copy(bilibiliLoginMessage = error.userMessage()) }
+            }
+        }
+    }
+
+    fun closeBilibiliLoginDialog() {
+        bilibiliLoginJob?.cancel()
+        _state.update { it.copy(bilibiliLoginDialogVisible = false, bilibiliLoginQrUrl = null) }
+    }
+
+    fun logoutBilibili() {
+        val serviceUrl = BuildConfig.PLATFORM_LIVE_SERVICE_URL
+        viewModelScope.launch {
+            runCatching { platformLiveRepository.bilibiliLogout(serviceUrl) }
+                .onFailure { error -> _state.update { it.copy(bilibiliLoginMessage = error.userMessage()) } }
+                .onSuccess {
+                    _state.update { it.copy(bilibiliLogin = BilibiliLoginStatus(), bilibiliLoginDialogVisible = false) }
+                }
+        }
     }
 
     fun openPlatformLiveFavorites() {
@@ -2569,6 +2652,9 @@ private fun customVideoApiLineId(baseUrl: String): String {
 }
 
 private const val DEFAULT_ALL_CATEGORY_TYPE_ID = 13
+private const val BILIBILI_SITE_ID = "bilibili"
+private const val BILIBILI_POLL_INTERVAL_MS = 2_000L
+private const val BILIBILI_QR_MAX_ROUNDS = 5 // 二维码约 3 分钟过期，最多自动换 5 次
 private const val PLATFORM_LIVE_RETRY_PER_LINE = 2
 private const val PLATFORM_LIVE_SECOND_RETRY_DELAY_MS = 1_000L
 

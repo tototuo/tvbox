@@ -12,3 +12,6 @@ signing/
 # Python acceptance tooling caches
 __pycache__/
 *.py[cod]
+
+# B站扫码登录保存的 Cookie（只在服务端本机）
+platform_live_server/bilibili_cookie.txt

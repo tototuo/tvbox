@@ -83,6 +83,9 @@ fun PlatformLiveScreen(
     actions: TvBoxViewModel,
 ) {
     BackHandler { actions.goBack() }
+    if (state.bilibiliLoginDialogVisible) {
+        BilibiliLoginDialog(state = state, actions = actions)
+    }
     when (state.platformLiveDestination) {
         PlatformLiveDestination.Sites -> PlatformLiveSitesScreen(state = state, actions = actions)
         PlatformLiveDestination.Favorites -> PlatformLiveRoomsScreen(state = state, actions = actions, favoritesMode = true)
@@ -161,6 +164,21 @@ private fun PlatformLiveParentCategoriesScreen(
         emptyMessage = "没有可用直播大分类",
         onRetry = actions::refreshPlatformLive,
     ) {
+        if (site?.id == "bilibili") {
+            item(key = "bilibili-login") {
+                val login = state.bilibiliLogin
+                PlatformLiveTextCard(
+                    label = "B站账号",
+                    title = if (login?.loggedIn == true) "已登录 · 原画" else "扫码登录",
+                    subtitle = when {
+                        login?.loggedIn == true -> login.name.ifBlank { "已登录" }
+                        login?.expired == true -> "登录已过期，重新扫码可看原画"
+                        else -> "未登录只能看超清，登录后可看原画"
+                    },
+                    onClick = actions::openBilibiliLoginDialog,
+                )
+            }
+        }
         itemsIndexed(
             state.platformLiveParentCategories,
             key = { _, category -> category.id },

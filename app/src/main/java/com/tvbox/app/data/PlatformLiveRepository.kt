@@ -31,7 +31,26 @@ interface PlatformLiveRepository {
         room: PlatformLiveRoom,
         forceRefresh: Boolean = false,
     ): ResolvedPlatformLiveStream
+
+    // B站扫码登录：Cookie 只保存在解析服务那台电脑上，电视只负责显示二维码和轮询状态
+    suspend fun bilibiliLoginStatus(serviceUrl: String): BilibiliLoginStatus =
+        throw UnsupportedOperationException()
+    suspend fun bilibiliLoginQrcode(serviceUrl: String): BilibiliLoginQrcode =
+        throw UnsupportedOperationException()
+    suspend fun bilibiliLoginPoll(serviceUrl: String, qrcodeKey: String): BilibiliLoginPoll =
+        throw UnsupportedOperationException()
+    suspend fun bilibiliLogout(serviceUrl: String): Unit = throw UnsupportedOperationException()
 }
+
+@Serializable
+data class BilibiliLoginStatus(val loggedIn: Boolean = false, val name: String = "", val expired: Boolean = false)
+
+@Serializable
+data class BilibiliLoginQrcode(val url: String = "", val qrcodeKey: String = "")
+
+/** state：waiting / scanned / expired / success / error */
+@Serializable
+data class BilibiliLoginPoll(val state: String = "", val message: String = "")
 
 data class PlatformLiveRoomsPage(
     val page: Int,
@@ -159,6 +178,24 @@ class DefaultPlatformLiveRepository : PlatformLiveRepository {
                 .toMap(),
             candidates = candidates,
         )
+    }
+
+    override suspend fun bilibiliLoginStatus(serviceUrl: String): BilibiliLoginStatus = withContext(Dispatchers.IO) {
+        json.decodeFromString<BilibiliLoginStatus>(get(serviceUrl, "v1/bilibili/login/status"))
+    }
+
+    override suspend fun bilibiliLoginQrcode(serviceUrl: String): BilibiliLoginQrcode = withContext(Dispatchers.IO) {
+        json.decodeFromString<BilibiliLoginQrcode>(get(serviceUrl, "v1/bilibili/login/qrcode"))
+    }
+
+    override suspend fun bilibiliLoginPoll(serviceUrl: String, qrcodeKey: String): BilibiliLoginPoll =
+        withContext(Dispatchers.IO) {
+            val key = java.net.URLEncoder.encode(qrcodeKey, "UTF-8")
+            json.decodeFromString<BilibiliLoginPoll>(get(serviceUrl, "v1/bilibili/login/poll?key=$key"))
+        }
+
+    override suspend fun bilibiliLogout(serviceUrl: String) {
+        withContext(Dispatchers.IO) { get(serviceUrl, "v1/bilibili/login/logout") }
     }
 
     private fun get(serviceUrl: String, path: String): String {
