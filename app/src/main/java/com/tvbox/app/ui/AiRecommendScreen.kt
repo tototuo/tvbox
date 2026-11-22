@@ -150,7 +150,7 @@ fun AiRecommendScreen(
                                 posterAspectRatio = AI_CARD_PLACEHOLDER_ASPECT_RATIO,
                                 textBlockHeight = cardTextHeight,
                             ),
-                            contentPadding = PaddingValues(bottom = 24.dp),
+                            contentPadding = PaddingValues(start = 10.dp, top = 12.dp, end = 10.dp, bottom = 24.dp), // 留出聚焦放大和边框的空间
                             horizontalArrangement = Arrangement.spacedBy(18.dp),
                             verticalArrangement = Arrangement.spacedBy(22.dp),
                             modifier = Modifier.fillMaxSize(),

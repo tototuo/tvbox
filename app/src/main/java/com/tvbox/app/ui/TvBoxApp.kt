@@ -662,7 +662,8 @@ private fun HistoryScreen(
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = TvLayout.HistoryGridMinWidth),
                     state = historyGrid,
-                    contentPadding = PaddingValues(bottom = 24.dp),
+                    // 上、左右留出聚焦放大和绿色边框的空间，否则第一排/两侧卡片的边框被网格边界裁掉
+                    contentPadding = PaddingValues(start = 10.dp, top = 12.dp, end = 10.dp, bottom = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
                     verticalArrangement = Arrangement.spacedBy(22.dp),
                     modifier = Modifier.fillMaxSize(),
