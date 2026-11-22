@@ -1479,7 +1479,8 @@ private fun MovieGrid(
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = TvLayout.PosterGridMinWidth),
             state = gridState,
-            contentPadding = PaddingValues(bottom = 24.dp),
+            // 上、左右留出聚焦放大和边框的空间
+            contentPadding = PaddingValues(start = 10.dp, top = 12.dp, end = 10.dp, bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(22.dp),
             modifier = Modifier.weight(1f),
@@ -1491,6 +1492,8 @@ private fun MovieGrid(
                         Spacer(Modifier.height(8.dp))
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            // 横向列表会裁掉超出部分：两侧和上下留出聚焦放大和边框的空间
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                             modifier = Modifier.onPreviewKeyEvent { event ->
                                 if (event.nativeKeyEvent.keyCode != AndroidKeyEvent.KEYCODE_DPAD_UP) false
                                 else {
