@@ -7,7 +7,7 @@ from unittest import mock
 
 import requests
 
-from bilibili_login import BilibiliLogin
+from bilibili_login import BilibiliLogin, sessdata_expires_at
 
 
 def fake_response(payload, cookies=None):
@@ -57,7 +57,20 @@ class BilibiliLoginTest(unittest.TestCase):
         self.login.logout()
         self.assertFalse(self.path.exists())
         self.assertEqual(self.changes, [""])
-        self.assertEqual(self.login.status(), {"loggedIn": False, "name": ""})
+        self.assertEqual(self.login.status(), {"loggedIn": False, "name": "", "verified": True, "expiresAt": ""})
+
+    def test_sessdata_expiry(self):
+        import time
+        expected = time.strftime("%Y-%m-%d", time.localtime(1795000000))
+        self.assertEqual(sessdata_expires_at("DedeUserID=1; SESSDATA=abc%2C1795000000%2Cxy*12"), expected)
+        self.assertEqual(sessdata_expires_at("SESSDATA=broken"), "")
+
+    def test_status_unverified_on_network_error(self):
+        self.path.write_text("SESSDATA=abc%2C1795000000%2Cx")
+        with mock.patch("bilibili_login.requests.get", side_effect=requests.ConnectionError("down")):
+            status = self.login.status()
+        self.assertTrue(status["loggedIn"])
+        self.assertFalse(status["verified"])
 
 
 if __name__ == "__main__":

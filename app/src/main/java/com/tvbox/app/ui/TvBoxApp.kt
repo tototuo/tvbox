@@ -1041,6 +1041,14 @@ internal fun BilibiliLoginDialog(
                             style = MaterialTheme.typography.titleMedium,
                         )
                         Text(
+                            text = when {
+                                !login.verified -> "暂时无法向 B站确认 Cookie 是否有效"
+                                login.expiresAt.isNotBlank() -> "Cookie 有效，有效期至 ${login.expiresAt}"
+                                else -> "Cookie 有效"
+                            },
+                            color = if (login.verified) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
                             text = "B站直播会按登录账号解析，可以看原画 / 蓝光。登录信息只保存在解析服务那台电脑上。",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

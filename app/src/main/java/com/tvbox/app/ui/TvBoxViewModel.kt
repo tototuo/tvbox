@@ -175,7 +175,8 @@ data class TvBoxUiState(
     val platformLiveError: String? = null,
     val platformLiveStream: ResolvedPlatformLiveStream? = null,
     // B站扫码登录（登录后解析服务能拿到原画）
-    val bilibiliLogin: BilibiliLoginStatus? = null,
+    val bilibiliLogin: BilibiliLoginStatus? = null, // null：还没查到
+    val bilibiliLoginStatusError: String? = null,
     val bilibiliLoginDialogVisible: Boolean = false,
     val bilibiliLoginQrUrl: String? = null,
     val bilibiliLoginMessage: String = "",
@@ -1597,9 +1598,11 @@ class TvBoxViewModel(
     fun refreshBilibiliLoginStatus() {
         val serviceUrl = BuildConfig.PLATFORM_LIVE_SERVICE_URL
         if (serviceUrl.isBlank()) return
+        _state.update { it.copy(bilibiliLogin = null, bilibiliLoginStatusError = null) }
         viewModelScope.launch {
             runCatching { platformLiveRepository.bilibiliLoginStatus(serviceUrl) }
                 .onSuccess { status -> _state.update { it.copy(bilibiliLogin = status) } }
+                .onFailure { error -> _state.update { it.copy(bilibiliLoginStatusError = error.userMessage()) } }
         }
     }
 

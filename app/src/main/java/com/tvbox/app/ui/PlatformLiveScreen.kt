@@ -39,6 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import com.tvbox.app.data.BilibiliLoginStatus
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -166,15 +167,24 @@ private fun PlatformLiveParentCategoriesScreen(
         headerAction = if (site?.id == "bilibili") {
             {
                 val login = state.bilibiliLogin
-                SettingsActionButton(
-                    text = when {
-                        login?.loggedIn == true -> "B站已登录 · 原画"
-                        login?.expired == true -> "B站登录已过期 · 重新扫码"
-                        else -> "扫码登录 B站 · 看原画"
-                    },
-                    onClick = actions::openBilibiliLoginDialog,
-                    selected = login?.loggedIn == true,
-                )
+                val (statusText, statusColor) = bilibiliLoginStatusLine(login, state.bilibiliLoginStatusError)
+                Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(bottom = 18.dp)) {
+                    SettingsActionButton(
+                        text = when {
+                            login?.loggedIn == true -> "B站账号"
+                            login?.expired == true -> "重新扫码登录 B站"
+                            else -> "扫码登录 B站 · 看原画"
+                        },
+                        onClick = actions::openBilibiliLoginDialog,
+                        selected = login?.loggedIn == true,
+                    )
+                    Text(
+                        text = statusText,
+                        modifier = Modifier.padding(top = 6.dp, end = 6.dp),
+                        color = statusColor,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         } else {
             null
@@ -816,3 +826,19 @@ private fun formatOnline(value: Int): String {
 
 private const val PLATFORM_LIVE_BADGE_HIDE_DELAY_MS = 2_000L
 
+/** B站登录状态一行字：账号、Cookie 是否有效、到期日。 */
+@Composable
+private fun bilibiliLoginStatusLine(login: BilibiliLoginStatus?, error: String?): Pair<String, Color> {
+    val ok = MaterialTheme.colorScheme.primary
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val bad = MaterialTheme.colorScheme.error
+    val expiry = login?.expiresAt?.takeIf { it.isNotBlank() }?.let { " · 有效期至 $it" }.orEmpty()
+    return when {
+        error != null -> "无法查询登录状态：$error" to bad
+        login == null -> "正在检查 B站登录…" to muted
+        login.loggedIn && login.verified -> "✓ 已登录：${login.name.ifBlank { "B站账号" }} · Cookie 有效$expiry" to ok
+        login.loggedIn -> "已保存登录，暂时无法向 B站确认是否有效$expiry" to muted
+        login.expired -> "✗ 登录已失效（Cookie 过期），只能看超清" to bad
+        else -> "未登录 · 只能看超清 720p" to muted
+    }
+}

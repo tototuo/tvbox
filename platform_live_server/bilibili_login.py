@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+import urllib.parse
 from pathlib import Path
 from typing import Callable
 
@@ -28,6 +30,18 @@ POLL_SUCCESS = 0
 POLL_EXPIRED = 86038
 POLL_SCANNED = 86090
 POLL_WAITING = 86101
+
+
+def sessdata_expires_at(cookie: str) -> str:
+    """SESSDATA 形如 abc%2C1795000000%2Cxyz，第二段是到期的 Unix 时间。解析不出返回空串。"""
+    for part in cookie.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name != "SESSDATA":
+            continue
+        fields = urllib.parse.unquote(value).split(",")
+        if len(fields) >= 2 and fields[1].isdigit():
+            return time.strftime("%Y-%m-%d", time.localtime(int(fields[1])))
+    return ""
 
 
 class BilibiliLogin:
@@ -88,16 +102,20 @@ class BilibiliLogin:
         return {"state": "success", "message": f"已登录：{status.get('name') or 'B站账号'}"}
 
     def status(self) -> dict[str, object]:
+        """loggedIn：Cookie 现在是否有效；verified：是否真的问过 B站（网络失败时为 False）；
+        expiresAt：SESSDATA 里带的到期日期。"""
         cookie = self.saved_cookie()
         if not cookie:
-            return {"loggedIn": False, "name": ""}
+            return {"loggedIn": False, "name": "", "verified": True, "expiresAt": ""}
+        expires_at = sessdata_expires_at(cookie)
         try:
             data = self._get_data(NAV_URL, {"Cookie": cookie})
         except (PlatformResolverError, requests.RequestException):
-            return {"loggedIn": True, "name": ""}  # 网络问题时不误报“已退出”
+            # 网络问题时不误报“已退出”，但标明没验证
+            return {"loggedIn": True, "name": "", "verified": False, "expiresAt": expires_at}
         if not data.get("isLogin"):
-            return {"loggedIn": False, "name": "", "expired": True}
-        return {"loggedIn": True, "name": str(data.get("uname") or "")}
+            return {"loggedIn": False, "name": "", "verified": True, "expired": True, "expiresAt": expires_at}
+        return {"loggedIn": True, "name": str(data.get("uname") or ""), "verified": True, "expiresAt": expires_at}
 
     def logout(self) -> None:
         with self._lock:

@@ -43,7 +43,13 @@ interface PlatformLiveRepository {
 }
 
 @Serializable
-data class BilibiliLoginStatus(val loggedIn: Boolean = false, val name: String = "", val expired: Boolean = false)
+data class BilibiliLoginStatus(
+    val loggedIn: Boolean = false,
+    val name: String = "",
+    val expired: Boolean = false,
+    val verified: Boolean = true, // false：服务端暂时连不上 B站，没能确认 Cookie 是否有效
+    val expiresAt: String = "", // SESSDATA 到期日期
+)
 
 @Serializable
 data class BilibiliLoginQrcode(val url: String = "", val qrcodeKey: String = "")
