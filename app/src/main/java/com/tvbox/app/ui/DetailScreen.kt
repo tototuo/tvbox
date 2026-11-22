@@ -228,7 +228,10 @@ private fun PlaySourceTabs(
         healthSnapshot = playbackHealth,
         nowMs = nowMs,
     )?.sourceIndex
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp), // 留出聚焦放大和边框的空间
+    ) {
         itemsIndexed(sources) { index, source ->
             val statusLabel = playSourceStatusLabel(
                 movieId = movie.id,

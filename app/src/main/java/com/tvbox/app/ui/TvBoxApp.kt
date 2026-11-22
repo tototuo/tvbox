@@ -1387,7 +1387,10 @@ private fun HomeCategoryRows(
         .orEmpty()
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp), // 留出聚焦放大和边框的空间
+        ) {
             item {
                 CategoryPill(
                     label = "热播",
@@ -1405,7 +1408,10 @@ private fun HomeCategoryRows(
             }
         }
         if (selectedParent != null && childCategories.isNotEmpty()) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp), // 留出聚焦放大和边框的空间
+        ) {
                 item {
                     CategoryPill(
                         label = selectedParent.allChildrenLabel(),
@@ -1644,7 +1650,10 @@ private fun DeviceModeSetting(selectedMode: DeviceMode, onModeSelect: (DeviceMod
             style = MaterialTheme.typography.bodySmall)
         Text("系统自动识别：${detectedMode.displayName}。播放行为以你的选择为准。",
             color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp), // 留出聚焦放大和边框的空间
+        ) {
             items(DeviceMode.entries, key = { it.storageKey }) { mode ->
                 SettingsActionButton(
                     text = if (selectedMode == mode) "✓ ${mode.displayName}" else mode.displayName,
@@ -1668,7 +1677,10 @@ private fun FontScaleSetting(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp), // 留出聚焦放大和边框的空间
+        ) {
             items(TvFontScale.entries, key = { it.storageKey }) { fontScale ->
                 SettingsActionButton(
                     text = if (selectedFontScale == fontScale) {
