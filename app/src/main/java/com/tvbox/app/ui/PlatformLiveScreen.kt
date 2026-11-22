@@ -255,8 +255,13 @@ private fun PlatformLiveRoomsScreen(
         state.platformLiveRooms.map(PlatformLiveRoom::id),
     ) {
         if (state.platformLiveRooms.isEmpty()) return@LaunchedEffect
-        gridState.scrollToItem(selectedRoomIndex)
+        // 目标卡片已经在屏幕上（如加载更多后，新房间就在原“加载更多”的位置）就不滚动，直接移光标，避免页面跳动
         withFrameNanos { }
+        val visible = gridState.layoutInfo.visibleItemsInfo.any { it.index == selectedRoomIndex }
+        if (!visible) {
+            gridState.scrollToItem(selectedRoomIndex)
+            withFrameNanos { }
+        }
         runCatching { selectedRoomFocusRequester.requestFocus() }
     }
     LaunchedEffect(favoritesMode, state.platformLiveRooms.isEmpty()) {
