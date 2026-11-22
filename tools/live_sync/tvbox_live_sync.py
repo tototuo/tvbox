@@ -1,0 +1,248 @@
+"""TVBox 电视直播源同步：拉远程 txt 直播源 → 逐条检测 → 去掉失效地址 → 按速度排序后输出。
+
+只用标准库，在 Mac mini 上由 crontab 定时运行：
+
+    tvbox_live_sync.py --output ~/Software/AriaNg/tvbox/live.txt
+
+输出格式与远程源一致（「分组,#genre#」+「频道,地址$线路信息」），电视端解析逻辑不变。
+检测规则：
+- m3u8：读播放列表；主列表就跟进第一个子列表；再下载第一个分片的开头，分片拿不到算失效
+  （实测很多线路列表能打开、分片 404）
+- 其他（flv / ts 直连等）：200 且开头不是 HTML 才算可用
+保护：本次可用数比上次少一半以上（多半是网络问题）时保留上次结果，不覆盖。
+省流：远程内容（sha256）与上次扫描时相同且输出文件还在，就跳过这一轮；--force 强制重扫。
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import ssl
+import sys
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+
+DEFAULT_SOURCES = [
+    "http://20.205.10.127:8787/tvbox/result.txt",
+    "https://tv.iill.top/m3u/Gather",
+]
+USER_AGENT = "Mozilla/5.0 (Linux; Android 9; BRAVIA) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+PROBE_BYTES = 2048
+MIN_KEEP_RATIO = 0.5
+
+
+@dataclass
+class Entry:
+    """直播源里的一行：分组标题行或频道线路行，raw 原样保留。"""
+
+    raw: str
+    group: str | None = None  # 分组行
+    url: str | None = None  # 线路行
+
+
+def stream_url(source_part: str) -> str:
+    """与 App 的 LiveParser 一致：'$' 之前是地址。"""
+    return source_part.split("$", 1)[0].strip()
+
+
+def parse_entries(text: str) -> list[Entry]:
+    entries: list[Entry] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or "," not in line:
+            continue
+        name, source = line.split(",", 1)
+        if not name.strip() or not source.strip():
+            continue
+        if source.strip().lower() == "#genre#":
+            entries.append(Entry(raw=line, group=name.strip()))
+            continue
+        url = stream_url(source)
+        if url.startswith(("http://", "https://")):
+            entries.append(Entry(raw=line, url=url))
+    return entries
+
+
+def build_output(entries: list[Entry], alive: dict[str, float]) -> tuple[str, int]:
+    """去掉失效和重复线路；同一频道内按响应时间从快到慢排；没有线路的分组整个去掉。"""
+    out: list[str] = []
+    kept = 0
+    group_line: str | None = None
+    block: list[tuple[str, str]] = []  # (频道名, 原始行)，保持频道首次出现的顺序
+
+    def flush() -> None:
+        nonlocal kept
+        if group_line is None or not block:
+            return
+        order: list[str] = []
+        by_channel: dict[str, list[str]] = {}
+        for channel, raw in block:
+            if channel not in by_channel:
+                order.append(channel)
+                by_channel[channel] = []
+            url = stream_url(raw.split(",", 1)[1])
+            # 同一频道里重复的地址只留第一条（App 也会按地址去重）
+            if all(stream_url(existing.split(",", 1)[1]) != url for existing in by_channel[channel]):
+                by_channel[channel].append(raw)
+        out.append(group_line)
+        for channel in order:
+            lines = sorted(by_channel[channel], key=lambda raw: alive[stream_url(raw.split(",", 1)[1])])
+            out.extend(lines)
+            kept += len(lines)
+
+    for entry in entries:
+        if entry.group is not None:
+            flush()
+            group_line, block = entry.raw, []
+        elif entry.url in alive and group_line is not None:
+            block.append((entry.raw.split(",", 1)[0].strip(), entry.raw))
+    flush()
+    return "\n".join(out) + ("\n" if out else ""), kept
+
+
+class Checker:
+    def __init__(self, timeout: float):
+        self.timeout = timeout
+        self.ssl_context = ssl.create_default_context()
+
+    def fetch(self, url: str, limit: int | None = None) -> tuple[bytes, str]:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
+        with urllib.request.urlopen(request, timeout=self.timeout, context=self.ssl_context) as response:
+            if response.status >= 400:
+                raise OSError(f"HTTP {response.status}")
+            data = response.read(limit) if limit else response.read(512 * 1024)
+            return data, response.geturl()
+
+    def check(self, url: str) -> float | None:
+        """可用返回耗时（秒），失效返回 None。"""
+        started = time.monotonic()
+        try:
+            ok = self._check(url)
+        except Exception:  # noqa: BLE001 - 任何网络/解析错误都算失效
+            return None
+        return time.monotonic() - started if ok else None
+
+    def _check(self, url: str) -> bool:
+        data, final_url = self.fetch(url, PROBE_BYTES * 64)
+        head = data[:PROBE_BYTES].lstrip()
+        if not head.startswith(b"#EXTM3U"):
+            return bool(head) and not looks_like_html(head)
+        playlist = data.decode("utf-8", "replace")
+        for _ in range(3):  # 主列表 → 子列表，最多跟两层
+            uri = first_uri(playlist)
+            if uri is None:
+                return False
+            target = urllib.parse.urljoin(final_url, uri)
+            if "#EXT-X-STREAM-INF" not in playlist:
+                segment, _ = self.fetch(target, PROBE_BYTES)
+                return bool(segment) and not looks_like_html(segment.lstrip())
+            sub, final_url = self.fetch(target, PROBE_BYTES * 64)
+            playlist = sub.decode("utf-8", "replace")
+            if not playlist.lstrip().startswith("#EXTM3U"):
+                return False
+        return False
+
+
+def looks_like_html(head: bytes) -> bool:
+    lowered = head[:64].lower()
+    return lowered.startswith((b"<!doctype", b"<html", b"<?xml", b"{")) or b"<html" in lowered
+
+
+def first_uri(playlist: str) -> str | None:
+    for line in playlist.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line
+    return None
+
+
+def download_source(sources: list[str], timeout: float) -> tuple[str, str]:
+    checker = Checker(timeout)
+    last_error: Exception | None = None
+    for source in sources:
+        try:
+            data, _ = checker.fetch(source)
+            text = data.decode("utf-8-sig", "replace")
+            if parse_entries(text):
+                return source, text
+            last_error = ValueError("没有可用线路")
+        except Exception as error:  # noqa: BLE001
+            last_error = error
+    raise RuntimeError(f"所有直播源都拉取失败：{last_error}")
+
+
+def write_atomic(path: str, content: str) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, temp = tempfile.mkstemp(dir=directory, prefix=".tmp-")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    os.chmod(temp, 0o644)
+    os.replace(temp, path)
+
+
+def read_status(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--output", required=True, help="输出的 txt 直播源路径")
+    parser.add_argument("--source", action="append", help="远程直播源，可多次指定；按顺序尝试")
+    parser.add_argument("--workers", type=int, default=48)
+    parser.add_argument("--timeout", type=float, default=8)
+    parser.add_argument("--force", action="store_true", help="远程没变化也重新扫描")
+    args = parser.parse_args(argv)
+
+    status_path = os.path.splitext(args.output)[0] + ".status.json"
+    previous = read_status(status_path)
+    started = time.time()
+    source, text = download_source(args.source or DEFAULT_SOURCES, args.timeout)
+    source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    unchanged = previous.get("sourceHash") == source_hash and os.path.exists(args.output)
+    if unchanged and not args.force:
+        print(f"{stamp} 远程直播源没有变化，跳过本轮扫描", flush=True)
+        return 0
+    entries = parse_entries(text)
+    urls = list(dict.fromkeys(entry.url for entry in entries if entry.url))
+    checker = Checker(args.timeout)
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        results = dict(zip(urls, pool.map(checker.check, urls)))
+    alive = {url: seconds for url, seconds in results.items() if seconds is not None}
+    content, kept_lines = build_output(entries, alive)
+    channels = len({entry.raw.split(",", 1)[0].strip() for entry in entries if entry.url in alive})
+
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    previous_alive = int(previous.get("aliveUrls") or 0)
+    if not alive or (previous_alive and len(alive) < previous_alive * MIN_KEEP_RATIO):
+        print(f"{stamp} 可用 {len(alive)}/{len(urls)}，比上次 {previous_alive} 少太多，保留上次结果", flush=True)
+        return 1
+
+    write_atomic(args.output, content)
+    status = {
+        "updatedAt": stamp,
+        "source": source,
+        "sourceHash": source_hash,
+        "totalUrls": len(urls),
+        "aliveUrls": len(alive),
+        "keptLines": kept_lines,
+        "channels": channels,
+        "seconds": round(time.time() - started, 1),
+    }
+    write_atomic(status_path, json.dumps(status, ensure_ascii=False, indent=2) + "\n")
+    print(f"{stamp} 来源 {source}：可用 {len(alive)}/{len(urls)} 个地址，{channels} 个频道，用时 {status['seconds']}s", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

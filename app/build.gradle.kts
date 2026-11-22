@@ -33,6 +33,8 @@ val aiApiKey = configProperty("TVBOX_AI_API_KEY")
 val platformLiveServiceUrl = configProperty("TVBOX_PLATFORM_LIVE_SERVICE_URL")
 // 在线更新清单地址；留空则关闭更新检查（自签名版本装不上作者的官方包）
 val updateManifestUrl = configProperty("TVBOX_UPDATE_MANIFEST_URL")
+// 电视直播源，逗号分隔，按顺序尝试；留空用作者的默认源
+val liveSourceUrls = configProperty("TVBOX_LIVE_SOURCE_URLS")
 val hasReleaseSigning = listOf(
     releaseStoreFile,
     releaseStorePassword,
@@ -53,6 +55,7 @@ android {
         buildConfigField("String", "AI_API_KEY", aiApiKey.toBuildConfigString())
         buildConfigField("String", "PLATFORM_LIVE_SERVICE_URL", platformLiveServiceUrl.toBuildConfigString())
         buildConfigField("String", "UPDATE_MANIFEST_URL", updateManifestUrl.toBuildConfigString())
+        buildConfigField("String", "LIVE_SOURCE_URLS", liveSourceUrls.toBuildConfigString())
     }
 
     signingConfigs {

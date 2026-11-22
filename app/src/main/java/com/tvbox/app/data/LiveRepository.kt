@@ -1,5 +1,7 @@
 ﻿package com.tvbox.app.data
 
+import com.tvbox.app.BuildConfig
+
 import com.tvbox.app.domain.LiveChannel
 import com.tvbox.app.domain.parseLiveChannels
 import kotlinx.coroutines.CancellationException
@@ -47,7 +49,14 @@ class DefaultLiveRepository(
     }
 }
 
-private val LIVE_SOURCE_URLS = listOf(
+private val DEFAULT_LIVE_SOURCE_URLS = listOf(
     "http://20.205.10.127:8787/tvbox/result.txt",
     "https://tv.iill.top/m3u/Gather",
 )
+
+// 编译时可用 TVBOX_LIVE_SOURCE_URLS 覆盖（逗号分隔，按顺序尝试），例如先用 Mac mini 上过滤过的源
+private val LIVE_SOURCE_URLS = BuildConfig.LIVE_SOURCE_URLS
+    .split(',')
+    .map { it.trim() }
+    .filter { it.isNotEmpty() }
+    .ifEmpty { DEFAULT_LIVE_SOURCE_URLS }
