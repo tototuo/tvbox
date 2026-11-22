@@ -70,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import com.tvbox.app.data.LiveStreamTypeProbe
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -291,7 +292,14 @@ private fun LivePlayerScreen(
         bufferingLineUrl = null
         automaticSwitchLineUrl = null
         channelBadgeVisible = true
-        player.setMediaItem(MediaItem.fromUri(currentLine.url))
+        // 不带后缀、跳转后才是 m3u8 的地址要明确告诉播放器是 HLS，否则会当普通文件读而报错
+        val mimeType = LiveStreamTypeProbe.mimeTypeFor(currentLine.url)
+        player.setMediaItem(
+            MediaItem.Builder()
+                .setUri(currentLine.url)
+                .apply { mimeType?.let(::setMimeType) }
+                .build(),
+        )
         player.prepare()
         session.preparePlayback(player)
     }
