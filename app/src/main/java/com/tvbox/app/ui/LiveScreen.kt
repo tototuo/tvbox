@@ -75,6 +75,11 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
+import androidx.media3.common.C
+import androidx.media3.common.ParserException
 import androidx.media3.ui.PlayerView
 import com.tvbox.app.domain.LivePlaybackWatchdog
 import com.tvbox.app.domain.LiveChannel
@@ -136,7 +141,12 @@ private fun LivePlayerScreen(
         activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
     }
     val player = remember {
-        ExoPlayer.Builder(context).build().apply {
+        ExoPlayer.Builder(context)
+            // 咪咕等源偶尔返回 602 / 空播放列表，默认会被当成格式错误直接判死，这里多给几次机会
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(context).setLoadErrorHandlingPolicy(LiveLoadErrorHandlingPolicy()),
+            )
+            .build().apply {
             playWhenReady = true
         }
     }
@@ -293,11 +303,11 @@ private fun LivePlayerScreen(
         automaticSwitchLineUrl = null
         channelBadgeVisible = true
         // 不带后缀、跳转后才是 m3u8 的地址要明确告诉播放器是 HLS，否则会当普通文件读而报错
-        val mimeType = LiveStreamTypeProbe.mimeTypeFor(currentLine.url)
+        val resolved = LiveStreamTypeProbe.resolve(currentLine.url)
         player.setMediaItem(
             MediaItem.Builder()
-                .setUri(currentLine.url)
-                .apply { mimeType?.let(::setMimeType) }
+                .setUri(resolved.url)
+                .apply { resolved.mimeType?.let(::setMimeType) }
                 .build(),
         )
         player.prepare()
@@ -892,3 +902,20 @@ private val LIVE_PLAYER_KEYS = setOf(
     AndroidKeyEvent.KEYCODE_MEDIA_PAUSE,
 ) + (AndroidKeyEvent.KEYCODE_0..AndroidKeyEvent.KEYCODE_9) +
     (AndroidKeyEvent.KEYCODE_NUMPAD_0..AndroidKeyEvent.KEYCODE_NUMPAD_9)
+
+/** 直播：播放列表偶尔读坏（602、空内容）时重试，而不是立刻判这条线路失效。 */
+@UnstableApi
+private class LiveLoadErrorHandlingPolicy : DefaultLoadErrorHandlingPolicy(LIVE_LOAD_MIN_RETRY_COUNT) {
+    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+        if (loadErrorInfo.exception is ParserException && loadErrorInfo.errorCount <= LIVE_PARSER_RETRY_COUNT) {
+            return LIVE_RETRY_DELAY_MS
+        }
+        return super.getRetryDelayMsFor(loadErrorInfo).let { delay ->
+            if (delay == C.TIME_UNSET) delay else delay.coerceAtMost(LIVE_RETRY_DELAY_MS * 2)
+        }
+    }
+}
+
+private const val LIVE_LOAD_MIN_RETRY_COUNT = 3
+private const val LIVE_PARSER_RETRY_COUNT = 2
+private const val LIVE_RETRY_DELAY_MS = 500L
