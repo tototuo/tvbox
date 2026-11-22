@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -606,25 +607,15 @@ private fun HistoryScreen(
         val historyFocus = rememberReturnFocus()
         RestoreGridFocus(historyFocus, historyGrid, state.historyItems.mapIndexed { index, item -> "${item.apiLineId}:${item.movieId}" to index })
         if (confirmClearHistory) {
-            AlertDialog(
-                onDismissRequest = { confirmClearHistory = false },
-                title = { Text("清空历史") },
-                text = { Text("确定要清空全部观看历史吗？清空后无法从历史页继续播放。") },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            confirmClearHistory = false
-                            actions.clearHistory()
-                        },
-                    ) {
-                        Text("清空")
-                    }
+            TvConfirmDialog(
+                title = "清空历史",
+                message = "确定要清空全部观看历史吗？清空后无法从历史页继续播放。",
+                confirmText = "清空",
+                onConfirm = {
+                    confirmClearHistory = false
+                    actions.clearHistory()
                 },
-                dismissButton = {
-                    TextButton(onClick = { confirmClearHistory = false }) {
-                        Text("取消")
-                    }
-                },
+                onDismiss = { confirmClearHistory = false },
             )
         }
         Column(
@@ -648,15 +639,12 @@ private fun HistoryScreen(
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
+                    SettingsActionButton(
+                        text = "清空历史",
                         enabled = state.historyItems.isNotEmpty(),
                         onClick = { confirmClearHistory = true },
-                    ) {
-                        Text("清空历史")
-                    }
-                    Button(onClick = actions::goBack) {
-                        Text("返回")
-                    }
+                    )
+                    SettingsActionButton(text = "返回", onClick = actions::goBack)
                 }
             }
             Spacer(modifier = Modifier.height(22.dp))
@@ -668,9 +656,7 @@ private fun HistoryScreen(
                 ) {
                     Text("暂无观看历史", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(14.dp))
-                    Button(onClick = actions::goBack) {
-                        Text("去看影片")
-                    }
+                    SettingsActionButton(text = "去看影片", onClick = actions::goBack)
                 }
             } else {
                 LazyVerticalGrid(
@@ -708,25 +694,15 @@ private fun SettingsScreen(
                 onSave = { actions.updateDefaultIntroSkipSeconds(it ?: 0) })
         }
         if (confirmClearPlaybackStats) {
-            AlertDialog(
-                onDismissRequest = { confirmClearPlaybackStats = false },
-                title = { Text("清空线路统计") },
-                text = { Text("确定要清空线路质量统计吗？清空后播放管家会重新学习线路表现。") },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            confirmClearPlaybackStats = false
-                            actions.clearPlaybackStats()
-                        },
-                    ) {
-                        Text("清空")
-                    }
+            TvConfirmDialog(
+                title = "清空线路统计",
+                message = "确定要清空线路质量统计吗？清空后播放管家会重新学习线路表现。",
+                confirmText = "清空",
+                onConfirm = {
+                    confirmClearPlaybackStats = false
+                    actions.clearPlaybackStats()
                 },
-                dismissButton = {
-                    TextButton(onClick = { confirmClearPlaybackStats = false }) {
-                        Text("取消")
-                    }
-                },
+                onDismiss = { confirmClearPlaybackStats = false },
             )
         }
         if (state.aiConfigDialogVisible) {
@@ -1020,9 +996,7 @@ private fun AiConfigDialog(
             SettingsActionButton(text = "完成", onClick = actions::closeAiConfigDialog)
         },
         dismissButton = {
-            TextButton(onClick = actions::closeAiConfigDialog) {
-                Text("取消")
-            }
+            SettingsActionButton(text = "取消", onClick = actions::closeAiConfigDialog)
         },
     )
 }
@@ -1085,9 +1059,7 @@ private fun AiPromptsDialog(
             SettingsActionButton(text = "完成", onClick = actions::closeAiPromptsDialog)
         },
         dismissButton = {
-            TextButton(onClick = actions::closeAiPromptsDialog) {
-                Text("取消")
-            }
+            SettingsActionButton(text = "取消", onClick = actions::closeAiPromptsDialog)
         },
     )
 }
@@ -1169,9 +1141,7 @@ private fun VideoApiConfigDialog(
             SettingsActionButton(text = "完成", onClick = actions::closeVideoApiConfigDialog)
         },
         dismissButton = {
-            TextButton(onClick = actions::closeVideoApiConfigDialog) {
-                Text("取消")
-            }
+            SettingsActionButton(text = "取消", onClick = actions::closeVideoApiConfigDialog)
         },
     )
 }
@@ -1229,6 +1199,38 @@ private fun AiProviderSetting(
             onClick = onOpenConfig,
             modifier = Modifier.weight(1.1f),
         )
+    }
+}
+
+/** 电视上焦点要明显：用和设置页一样的按钮；打开时焦点默认在“取消”，防止误按确认。 */
+@Composable
+private fun TvConfirmDialog(
+    title: String,
+    message: String,
+    confirmText: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val cancelFocus = remember { FocusRequester() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            SettingsActionButton(text = confirmText, onClick = onConfirm)
+        },
+        dismissButton = {
+            SettingsActionButton(
+                text = "取消",
+                onClick = onDismiss,
+                modifier = Modifier.focusRequester(cancelFocus),
+            )
+        },
+    )
+    LaunchedEffect(Unit) {
+        // 弹窗窗口挂上之后才能请求焦点
+        delay(50)
+        runCatching { cancelFocus.requestFocus() }
     }
 }
 
