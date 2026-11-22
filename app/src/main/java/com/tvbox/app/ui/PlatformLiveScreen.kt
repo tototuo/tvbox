@@ -519,11 +519,10 @@ private fun PlatformLiveImageCard(
     // 遥控器：长按确认键或按菜单键 = 收藏 / 取消收藏（星星在卡片里，方向键移不到它上面）
     var longPressHandled by remember { mutableStateOf(false) }
     val shape = MaterialTheme.shapes.medium
-    Box(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = modifier
-                .fillMaxWidth()
-                .tvFocusScale(shape = shape)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .tvFocusScale(shape = shape)
                 .clip(shape)
                 .onFocusChanged { focused = it.isFocused || it.hasFocus }
                 .background(if (focused) Color(0xFF252525) else MaterialTheme.colorScheme.surface)
@@ -552,7 +551,8 @@ private fun PlatformLiveImageCard(
                 }
                 .clickable(onClick = onClick)
                 .focusable(),
-        ) {
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
