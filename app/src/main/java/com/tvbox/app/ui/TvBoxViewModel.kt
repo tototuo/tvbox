@@ -63,6 +63,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -1093,7 +1095,7 @@ class TvBoxViewModel(
                         }
                     } else {
                         _state.update { it.copy(aiResolvingKeyword = null, aiError = null) }
-                        openDetail(movie.id)
+                        openDetail(movie.id, movie.apiLineId)
                     }
                 }
                 .onFailure { error ->
@@ -1127,7 +1129,7 @@ class TvBoxViewModel(
                     if (movie == null) {
                         _state.update { it.copy(homeNotice = "暂无该视频资源") }
                     } else {
-                        openDetail(movie.id, apiLineId)
+                        openDetail(movie.id, movie.apiLineId)
                     }
                 }
                 .onFailure { error ->
@@ -2109,35 +2111,48 @@ class TvBoxViewModel(
     private suspend fun findPlayableMovie(item: AiRecommendationItem): Movie? {
         val keyword = item.searchKeyword.ifBlank { item.name }.trim()
         if (keyword.isBlank()) return null
-        val movies = repository.getMovies(
-            apiLineId = _state.value.selectedApiLineId,
-            page = 1,
-            keyword = keyword,
-        ).movies
-        if (movies.isEmpty()) return null
-
         val normalizedKeyword = keyword.normalizeAiMatchText()
         val normalizedName = item.name.normalizeAiMatchText()
-        return movies.firstOrNull { movie ->
-            val candidate = movie.name.normalizeAiMatchText()
-            candidate == normalizedKeyword || candidate == normalizedName
-        } ?: movies.firstOrNull { movie ->
-            val candidate = movie.name.normalizeAiMatchText()
-            candidate.isNotBlank() &&
-                (candidate.contains(normalizedKeyword) || normalizedKeyword.contains(candidate))
-        } ?: movies.first()
+        return searchPreferringSelectedLine(keyword, _state.value.selectedApiLineId) { movies ->
+            movies.firstOrNull { movie ->
+                val candidate = movie.name.normalizeAiMatchText()
+                candidate == normalizedKeyword || candidate == normalizedName
+            } ?: movies.firstOrNull { movie ->
+                val candidate = movie.name.normalizeAiMatchText()
+                candidate.isNotBlank() &&
+                    (candidate.contains(normalizedKeyword) || normalizedKeyword.contains(candidate))
+            } ?: movies.firstOrNull()
+        }
     }
 
     private suspend fun findPlayableDoubanMovie(title: String, apiLineId: String): Movie? {
         val keyword = title.trim()
         if (keyword.isBlank()) return null
-        val movies = repository.getMovies(
-            apiLineId = apiLineId,
-            page = 1,
-            keyword = keyword,
-        ).movies
-        val matchedIndex = findBestTitleMatchIndex(keyword, movies.map { it.name }) ?: return null
-        return movies.getOrNull(matchedIndex)
+        return searchPreferringSelectedLine(keyword, apiLineId) { movies ->
+            findBestTitleMatchIndex(keyword, movies.map { it.name })?.let(movies::get)
+        }
+    }
+
+    /**
+     * 先在当前资源站搜；当前站连不上或没匹配到，再所有站一起搜，用第一个匹配上的结果。
+     * 返回的 Movie 带着它所在站的 apiLineId，打开详情时要用它。
+     */
+    private suspend fun searchPreferringSelectedLine(
+        keyword: String,
+        apiLineId: String,
+        pick: (List<Movie>) -> Movie?,
+    ): Movie? {
+        val primary = try {
+            repository.getMovies(apiLineId = apiLineId, page = 1, keyword = keyword).movies
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            emptyList()
+        }
+        pick(primary)?.let { return it }
+        return repository.searchProgressively(apiLineId = apiLineId, page = 1, keyword = keyword)
+            .map { update -> pick(update.movies) }
+            .firstOrNull { it != null }
     }
 
     private fun buildAiRecommendationRequest(query: String, excludedNames: List<String>): String {
