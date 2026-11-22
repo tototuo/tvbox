@@ -139,15 +139,17 @@ class MainActivity : ComponentActivity() {
             }
         }
         val handled = super.dispatchKeyEvent(event)
-        // 页面只在 KeyUp 时处理数字键，KeyDown 没人接就会落到系统；
-        // 索尼等电视会把未处理的数字键当成「切到电视 / HDMI 信号源」。数字键一律不交给系统。
-        if (!handled && event.isDigitKey()) return true
+        // 页面只在 KeyUp 时处理数字键，KeyDown 没人接就会落到系统
+        if (!handled && event.isTvInputSwitchingKey()) return true
         return handled
     }
 
-    private fun KeyEvent.isDigitKey(): Boolean =
+    // 索尼等电视会把没人处理的数字键、频道 +/- 当成「切到电视 / HDMI 信号源」，这些键一律不交给系统
+    private fun KeyEvent.isTvInputSwitchingKey(): Boolean =
         keyCode in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ||
-            keyCode in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9
+            keyCode in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 ||
+            keyCode == KeyEvent.KEYCODE_CHANNEL_UP ||
+            keyCode == KeyEvent.KEYCODE_CHANNEL_DOWN
 
     override fun onPause() {
         searchMenuShortcut.reset()

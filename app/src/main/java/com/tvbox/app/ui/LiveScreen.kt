@@ -403,11 +403,15 @@ private fun LivePlayerScreen(
                     return@onPreviewKeyEvent event.nativeKeyEvent.keyCode in LIVE_PLAYER_KEYS
                 }
                 when (event.nativeKeyEvent.keyCode) {
-                    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                    AndroidKeyEvent.KEYCODE_DPAD_LEFT,
+                    AndroidKeyEvent.KEYCODE_CHANNEL_DOWN,
+                    -> {
                         actions.playPreviousLiveChannel()
                         true
                     }
-                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                    AndroidKeyEvent.KEYCODE_CHANNEL_UP,
+                    -> {
                         actions.playNextLiveChannel()
                         true
                     }
@@ -864,6 +868,8 @@ private const val MOBILE_LANDSCAPE_CHANNEL_PANEL_WIDTH_FRACTION = 0.44f
 private val LIVE_PLAYER_KEYS = setOf(
     AndroidKeyEvent.KEYCODE_DPAD_LEFT,
     AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+    AndroidKeyEvent.KEYCODE_CHANNEL_UP,
+    AndroidKeyEvent.KEYCODE_CHANNEL_DOWN,
     AndroidKeyEvent.KEYCODE_DPAD_UP,
     AndroidKeyEvent.KEYCODE_DPAD_DOWN,
     AndroidKeyEvent.KEYCODE_DPAD_CENTER,
