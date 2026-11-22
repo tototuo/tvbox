@@ -2467,8 +2467,15 @@ class TvBoxViewModel(
                             } else {
                                 (it.platformLiveRooms + result.rooms).distinctBy { room -> room.id }
                             }
+                            val previousCount = it.platformLiveRooms.size
                             it.copy(
                                 platformLiveRooms = rooms,
+                                // 加载更多后光标落在新加载的第一个房间（原来“加载更多”的位置），而不是跳回第一张卡片
+                                platformLiveRoomIndex = when {
+                                    reset -> it.platformLiveRoomIndex
+                                    rooms.size > previousCount -> previousCount
+                                    else -> rooms.lastIndex.coerceAtLeast(0)
+                                },
                                 platformLiveRoomPage = result.page,
                                 platformLiveRoomPageCount = result.pageCount,
                                 platformLiveLoading = false,
